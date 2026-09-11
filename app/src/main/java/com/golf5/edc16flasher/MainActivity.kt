@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Color
 import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Build
@@ -20,6 +21,11 @@ import com.golf5.edc16flasher.usb.UsbSerialManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -29,7 +35,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var flasher: EcuFlasher
 
     private var customBinBytes: ByteArray? = null
-    private var selectedFileName: String = "03G906021QJ_stage1_refined_dpf_egr_off.bin (Вбудована)"
+    private var selectedFileName: String = "03G906021QJ_stage1_refined_CS_OK.bin (Вбудована)"
 
     private val openDocumentLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -43,18 +49,18 @@ class MainActivity : AppCompatActivity() {
                 UsbSerialManager.ACTION_USB_PERMISSION -> {
                     val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                     if (granted) {
-                        appendLog("Дозвіл USB надано користувачем.")
+                        appendLog("[USB] Дозвіл USB надано користувачем.")
                         connectUsb()
                     } else {
-                        appendLog("Помилка: Доступ до USB відхилено.")
+                        appendLog("[USB] Помилка: Доступ до USB відхилено.")
                     }
                 }
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    appendLog("Виявлено підключення USB пристрою.")
+                    appendLog("[USB] Виявлено підключення діагностичного адаптера.")
                     checkUsbDevices()
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    appendLog("USB пристрій відключено.")
+                    appendLog("[USB] Адаптер відключено.")
                     usbSerialManager.close()
                     updateUiDisconnected()
                 }
@@ -94,12 +100,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupButtons() {
-        binding.btnReadId.setOnClickListener {
-            readEcuId()
-        }
-
-        binding.btnFlash.setOnClickListener {
-            confirmAndFlash()
+        binding.btnEcuId.setOnClickListener { readEcuId() }
+        binding.btnRead.setOnClickListener { confirmAndRead() }
+        binding.btnWrite.setOnClickListener { confirmAndFlash() }
+        binding.btnRecovery.setOnClickListener { confirmAndRecovery() }
+        binding.btnClearDtc.setOnClickListener { clearDtc() }
+        binding.btnSelectFile.setOnClickListener {
+            openDocumentLauncher.launch(arrayOf("application/octet-stream", "*/*"))
         }
     }
 
@@ -108,13 +115,11 @@ class MainActivity : AppCompatActivity() {
         if (drivers.isNotEmpty()) {
             val driver = drivers[0]
             val dev = driver.device
-            binding.tvUsbStatus.text = "● Виявлено адаптер: ${dev.manufacturerName ?: "FTDI"} (${dev.productName ?: "K-Line"})"
-            binding.tvUsbStatus.setTextColor(getColor(R.color.accent))
-            binding.tvDeviceInfo.text = "VendorID: 0x${Integer.toHexString(dev.vendorId).uppercase()}, ProductID: 0x${Integer.toHexString(dev.productId).uppercase()}"
-
-            appendLog("Знайдено адаптер: ${dev.productName ?: "USB Serial"}")
+            binding.tvUsbStatus.text = "● Адаптер підключено: ${dev.productName ?: "MPPS / FTDI K-Line"}"
+            binding.tvUsbStatus.setTextColor(Color.parseColor("#00E676"))
+            appendLog("[USB] Знайдено адаптер: ${dev.productName ?: "USB Serial"} (VID: 0x${Integer.toHexString(dev.vendorId).uppercase()})")
             usbSerialManager.requestPermission(driver) {
-                appendLog("Запит дозволу USB...")
+                appendLog("[USB] Запит системного дозволу USB...")
             }
         } else {
             updateUiDisconnected()
@@ -123,37 +128,171 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateUiDisconnected() {
         binding.tvUsbStatus.text = "● USB кабель не підключено"
-        binding.tvUsbStatus.setTextColor(getColor(R.color.text_secondary))
-        binding.tvDeviceInfo.text = "Підключіть OTG перехідник та кабель MPPS / K-Line"
+        binding.tvUsbStatus.setTextColor(Color.parseColor("#FF5252"))
     }
 
     private fun connectUsb() {
         val drivers = usbSerialManager.findSupportedDevices()
         if (drivers.isNotEmpty()) {
             if (usbSerialManager.open(drivers[0], 10400)) {
-                appendLog("Порт успішно відкрито (10400 бод). Готово до роботи!")
+                appendLog("[USB] Порт K-Line успішно відкрито (10400 бод).")
             } else {
-                appendLog("Не вдалося відкрити порт USB.")
+                appendLog("[USB] Не вдалося відкрити порт.")
             }
         }
     }
 
     private fun readEcuId() {
         if (!usbSerialManager.isConnected) {
-            appendLog("Помилка: USB адаптер не підключено!")
+            appendLog("[MPPS] Помилка: USB адаптер не підключено!")
             return
         }
 
         lifecycleScope.launch {
-            appendLog("Зчитування даних ЕБУ (KWP2000)...")
+            appendLog("[MPPS] Зчитування ідентифікатора ЕБУ...")
             try {
-                val ecuInfo = withContext(Dispatchers.IO) {
-                    protocol.readEcuIdentification()
-                }
-                binding.tvEcuId.text = ecuInfo
-                appendLog("Успішно:\n$ecuInfo")
+                val ecuInfo = withContext(Dispatchers.IO) { protocol.readEcuIdentification() }
+                binding.tvEcuId.text = "ECU ID: $ecuInfo"
+                appendLog("[MPPS] Успішно:\n$ecuInfo")
             } catch (e: Exception) {
-                appendLog("Помилка зчитування ID: ${e.message}")
+                appendLog("[MPPS] Помилка: ${e.message}")
+            }
+        }
+    }
+
+    private fun confirmAndRead() {
+        if (!usbSerialManager.isConnected) {
+            appendLog("[MPPS] Помилка: USB адаптер не підключено!")
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Зчитування калібрувань (Read ECU)")
+            .setMessage("Зчитати калібрувальний сектор (512 КБ) у пам'ять телефону для бекапу?")
+            .setPositiveButton("Зчитати") { _, _ -> startReading() }
+            .setNegativeButton("Скасувати", null)
+            .show()
+    }
+
+    private fun startReading() {
+        setControlsEnabled(false)
+        lifecycleScope.launch {
+            val fullImage = flasher.readCalibration { progress, msg ->
+                runOnUiThread {
+                    binding.progressBar.progress = progress
+                    binding.tvProgress.text = "$progress% - $msg"
+                    appendLog(msg)
+                }
+            }
+            setControlsEnabled(true)
+
+            if (fullImage != null) {
+                val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                val backupFile = File(getExternalFilesDir(null), "03G906021QJ_backup_$timeStamp.bin")
+                FileOutputStream(backupFile).use { it.write(fullImage) }
+                appendLog("[MPPS] Бекап успішно збережено: ${backupFile.absolutePath}")
+
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Зчитування завершено!")
+                    .setMessage("Резервну копію збережено:
+${backupFile.name}
+Розмір: 2 097 152 байти.")
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun confirmAndFlash() {
+        if (!usbSerialManager.isConnected) {
+            appendLog("[MPPS] Помилка: USB адаптер не підключено!")
+            return
+        }
+
+        val msg = "УВАГА (Запис MPPS):\n\n" +
+            "1. Акумулятор заряджений (12.4В+).\n" +
+            "2. Увімкніть 'Режим польоту' на телефоні.\n" +
+            "3. Вимкніть споживачі в авто.\n" +
+            "4. Контрольна сума буде автоматично перерахована.\n\n" +
+            "Записати $selectedFileName?"
+
+        AlertDialog.Builder(this)
+            .setTitle("Запис прошивки (Write Flash)")
+            .setMessage(msg)
+            .setPositiveButton("Записати") { _, _ -> startFlashing(isRecovery = false) }
+            .setNegativeButton("Скасувати", null)
+            .show()
+    }
+
+    private fun confirmAndRecovery() {
+        if (!usbSerialManager.isConnected) {
+            appendLog("[RECOVERY] Помилка: USB адаптер не підключено!")
+            return
+        }
+
+        val msg = "УВАГА: РЕЖИМ АВАРІЙНОГО ВІДНОВЛЕННЯ\n\n" +
+            "Використовуйте тільки якщо запис було перервано і блок не реагує на стандартний запит.\n" +
+            "Програма пропустить перевірку ID і примусово увійде в режим бутлоадера.\n\n" +
+            "Почати аварійне відновлення?"
+
+        AlertDialog.Builder(this)
+            .setTitle("Аварійне відновлення (Recovery)")
+            .setMessage(msg)
+            .setPositiveButton("Відновити") { _, _ -> startFlashing(isRecovery = true) }
+            .setNegativeButton("Скасувати", null)
+            .show()
+    }
+
+    private fun startFlashing(isRecovery: Boolean) {
+        setControlsEnabled(false)
+        lifecycleScope.launch {
+            val binBytes = customBinBytes ?: withContext(Dispatchers.IO) {
+                assets.open("03G906021QJ_stage1_refined_CS_OK.bin").readBytes()
+            }
+
+            val success = if (isRecovery) {
+                flasher.recoveryFlash(binBytes) { progress, msg ->
+                    runOnUiThread {
+                        binding.progressBar.progress = progress
+                        binding.tvProgress.text = "$progress% - $msg"
+                        appendLog(msg)
+                    }
+                }
+            } else {
+                flasher.flashFirmware(binBytes) { progress, msg ->
+                    runOnUiThread {
+                        binding.progressBar.progress = progress
+                        binding.tvProgress.text = "$progress% - $msg"
+                        appendLog(msg)
+                    }
+                }
+            }
+            setControlsEnabled(true)
+
+            if (success) {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Успіх!")
+                    .setMessage("Прошивку успішно записано (КС валідна)!
+Вимкніть запалювання на 10с, потім запустіть двигун.")
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun clearDtc() {
+        if (!usbSerialManager.isConnected) {
+            appendLog("[DTC] Помилка: USB адаптер не підключено!")
+            return
+        }
+
+        lifecycleScope.launch {
+            appendLog("[DTC] Очищення кодів помилок (Clear DTC Service 0x14)...")
+            val ok = withContext(Dispatchers.IO) { protocol.clearDiagnosticTroubleCodes() }
+            if (ok) {
+                appendLog("[DTC] Всі коди помилок успішно очищені!")
+            } else {
+                appendLog("[DTC] Помилка або немає відповіді від ЕБУ.")
             }
         }
     }
@@ -167,74 +306,28 @@ class MainActivity : AppCompatActivity() {
                 if (bytes != null && bytes.size == 2097152) {
                     customBinBytes = bytes
                     selectedFileName = uri.lastPathSegment ?: "custom.bin"
-                    binding.tvFileStatus.text = "Файл: $selectedFileName (2 097 152 байт OK)"
-                    appendLog("Завантажено зовнішній файл: $selectedFileName")
+                    binding.tvFileStatus.text = "File: $selectedFileName (2 097 152b OK)"
+                    appendLog("[MPPS] Завантажено зовнішній бінарник: $selectedFileName")
                 } else {
-                    appendLog("Помилка: розмір файлу повинен бути рівно 2 097 152 байти!")
+                    appendLog("[MPPS] Помилка: файл повинен бути рівно 2 097 152 байти!")
                 }
             } catch (e: Exception) {
-                appendLog("Помилка завантаження файлу: ${e.message}")
+                appendLog("[MPPS] Помилка відкриття файлу: ${e.message}")
             }
         }
     }
 
-    private fun confirmAndFlash() {
-        if (!usbSerialManager.isConnected) {
-            appendLog("Помилка: USB адаптер не підключено!")
-            return
-        }
-
-        val message = "УВАГА:\n\n" +
-            "1. Переконайтеся, що акумулятор автомобіля заряджений (не нижче 12.4 В).\n" +
-            "2. Увімкніть режим 'У літаку' на телефоні, щоб уникнути дзвінків.\n" +
-            "3. НЕ відключайте OTG кабель під час запису!\n" +
-            "4. Вимкніть споживачі (клімат, фари, музику).\n\n" +
-            "Почати запис прошивки ($selectedFileName)?"
-
-        AlertDialog.Builder(this)
-            .setTitle("Підтвердження запису прошивки")
-            .setMessage(message)
-            .setPositiveButton("Записати") { _, _ ->
-                startFlashing()
-            }
-            .setNegativeButton("Скасувати", null)
-            .show()
-    }
-
-    private fun startFlashing() {
-        binding.progressBar.visibility = View.VISIBLE
-        binding.tvProgress.visibility = View.VISIBLE
-        binding.btnFlash.isEnabled = false
-        binding.btnReadId.isEnabled = false
-
-        lifecycleScope.launch {
-            val binBytes = customBinBytes ?: withContext(Dispatchers.IO) {
-                assets.open("03G906021QJ_stage1_refined_dpf_egr_off.bin").readBytes()
-            }
-
-            appendLog("Завантажено прошивку: ${binBytes.size} байт")
-            val success = flasher.flashFirmware(binBytes) { progress, message ->
-                runOnUiThread {
-                    binding.progressBar.progress = progress
-                    binding.tvProgress.text = "$progress% - $message"
-                    appendLog(message)
-                }
-            }
-
-            binding.btnFlash.isEnabled = true
-            binding.btnReadId.isEnabled = true
-
-            if (success) {
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Успіх!")
-                    .setMessage("Прошивку успішно записано в блок EDC16U34!\nВимкніть запалювання на 10 секунд, після чого запустіть двигун.")
-                    .setPositiveButton("OK", null)
-                    .show()
-            }
-        }
+    private fun setControlsEnabled(enabled: Boolean) {
+        binding.btnEcuId.isEnabled = enabled
+        binding.btnRead.isEnabled = enabled
+        binding.btnWrite.isEnabled = enabled
+        binding.btnRecovery.isEnabled = enabled
+        binding.btnClearDtc.isEnabled = enabled
+        binding.btnSelectFile.isEnabled = enabled
     }
 
     private fun appendLog(msg: String) {
         binding.tvLog.append("$msg\n")
+        binding.scrollLog.post { binding.scrollLog.fullScroll(View.FOCUS_DOWN) }
     }
 }
