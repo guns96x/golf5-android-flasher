@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- FTDI FT232R / FT232RL (Standard VAG KKL / MPPS / OBD cables) -->
+    <usb-device vendor-id="1027" product-id="24577" />
+    <usb-device vendor-id="1027" product-id="24592" />
+    <usb-device vendor-id="1027" product-id="24593" />
+    <!-- CH340 / CH341 -->
+    <usb-device vendor-id="6790" product-id="29987" />
+    <!-- Silicon Labs CP2102 -->
+    <usb-device vendor-id="4292" product-id="60000" />
+    <!-- Prolific PL2303 -->
+    <usb-device vendor-id="1659" product-id="8963" />
+</resources>

@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Golf 5 EDC16 Flasher</string>
+    <string name="status_disconnected">USB кабель не підключено</string>
+    <string name="status_connected">OTG адаптер підключено</string>
+    <string name="btn_read_id">1. Зчитати ID ЕБУ</string>
+    <string name="btn_flash">2. Записати прошивку (Refined Stage 1)</string>
+    <string name="firmware_ready">Файл готовий: 03G906021QJ_stage1_refined_dpf_egr_off.bin</string>
+</resources>
