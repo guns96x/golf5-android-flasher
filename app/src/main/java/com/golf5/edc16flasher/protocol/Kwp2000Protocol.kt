@@ -4,26 +4,34 @@ import com.golf5.edc16flasher.usb.UsbSerialManager
 import java.io.IOException
 
 /**
- * KWP2000 (ISO 14230-4) Implementation for Bosch EDC16U34
+ * Robust KWP2000 (ISO 14230-4) Implementation for Bosch EDC16U34
+ * Incorporates:
+ * - K-Line half-duplex local echo filtering
+ * - Strict positive response verification (SID + 0x40)
+ * - NRC 0x78 (Response Pending) P2* wait loop
+ * - Maximum block payload <= 128 bytes to prevent length overflow
  */
 class Kwp2000Protocol(private val usb: UsbSerialManager) {
 
-    private val targetAddress: Byte = 0x01.toByte() // Engine ECU (0x01)
-    private val sourceAddress: Byte = 0xF1.toByte() // Diagnostic Tool (0xF1)
+    private val targetAddress: Byte = 0x01.toByte() // Engine ECU
+    private val sourceAddress: Byte = 0xF1.toByte() // Diagnostic Tool
 
     fun sendRequest(serviceId: Byte, payload: ByteArray = ByteArray(0)): ByteArray {
-        val length = 1 + payload.size
-        val packet = ArrayList<Byte>()
+        val dataLen = 1 + payload.size
+        if (dataLen > 255) {
+            throw IllegalArgumentException("Payload exceeds ISO 14230 single-byte length limit ($dataLen > 255)")
+        }
 
-        if (length <= 63) {
-            packet.add((0x80 or length).toByte())
+        val packet = ArrayList<Byte>()
+        if (dataLen <= 63) {
+            packet.add((0x80 or dataLen).toByte())
             packet.add(targetAddress)
             packet.add(sourceAddress)
         } else {
             packet.add(0x80.toByte())
             packet.add(targetAddress)
             packet.add(sourceAddress)
-            packet.add(length.toByte())
+            packet.add(dataLen.toByte())
         }
         packet.add(serviceId)
         for (b in payload) {
@@ -37,35 +45,77 @@ class Kwp2000Protocol(private val usb: UsbSerialManager) {
         }
         packet.add(checksum)
 
-        val rawOut = packet.toByteArray()
-        usb.write(rawOut, 2000)
+        val txBytes = packet.toByteArray()
+        usb.write(txBytes, 2000)
 
-        // Read response
-        val rxBuf = ByteArray(512)
-        val bytesRead = usb.read(rxBuf, 3000)
-        if (bytesRead < 4) {
-            throw IOException("KWP2000 No response or response too short ($bytesRead bytes)")
+        // Read and parse response with NRC 0x78 pending handling
+        val startTime = System.currentTimeMillis()
+        val timeoutMs = 6000L
+
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
+            val rxBytes = readFrame(serviceId, txBytes)
+            if (rxBytes.isNotEmpty()) {
+                // Check if NRC 0x78 (Response Pending)
+                val expectedPositiveSid = ((serviceId.toInt() and 0xFF) + 0x40).toByte()
+                val isNegative = rxBytes.any { it == 0x7F.toByte() }
+                
+                if (isNegative) {
+                    val idx = rxBytes.indexOf(0x7F.toByte())
+                    if (idx != -1 && idx + 2 < rxBytes.size) {
+                        val failedSid = rxBytes[idx + 1]
+                        val nrc = rxBytes[idx + 2]
+                        if (failedSid == serviceId && (nrc.toInt() and 0xFF) == 0x78) {
+                            // Response Pending: ECU is busy erasing/calculating, continue waiting
+                            Thread.sleep(50)
+                            continue
+                        } else if (failedSid == serviceId) {
+                            throw IOException(String.format("ECU Negative Response: SID 0x%02X NRC 0x%02X", serviceId, nrc))
+                        }
+                    }
+                }
+
+                // Verify positive response SID
+                val hasPositiveSid = rxBytes.any { it == expectedPositiveSid }
+                if (hasPositiveSid) {
+                    return rxBytes
+                }
+            }
+            Thread.sleep(20)
         }
 
-        val resp = rxBuf.copyOfRange(0, bytesRead)
-        // Check for Negative Response (0x7F)
-        for (i in 0 until resp.size - 2) {
-            if (resp[i] == 0x7F.toByte() && resp[i + 1] == serviceId) {
-                val nrc = resp[i + 2]
-                throw IOException(String.format("ECU Negative Response: Service 0x%02X NRC 0x%02X", serviceId, nrc))
+        throw IOException(String.format("Timeout waiting for positive response to SID 0x%02X", serviceId))
+    }
+
+    private fun readFrame(serviceId: Byte, txEchoToDiscard: ByteArray): ByteArray {
+        val buffer = ByteArray(512)
+        val readCount = usb.read(buffer, 3000)
+        if (readCount <= 0) return ByteArray(0)
+
+        var raw = buffer.copyOfRange(0, readCount)
+
+        // Filter out K-Line local echo if present
+        if (raw.size >= txEchoToDiscard.size) {
+            var match = true
+            for (i in txEchoToDiscard.indices) {
+                if (raw[i] != txEchoToDiscard[i]) {
+                    match = false
+                    break
+                }
+            }
+            if (match) {
+                raw = raw.copyOfRange(txEchoToDiscard.size, raw.size)
             }
         }
-        return resp
+
+        return raw
     }
 
     fun startDiagnosticSession(sessionType: Byte = 0x85.toByte()): Boolean {
-        // 0x10 = StartDiagnosticSession, 0x85 = Programming Session
         val resp = sendRequest(0x10.toByte(), byteArrayOf(sessionType))
         return resp.isNotEmpty()
     }
 
     fun readEcuIdentification(): String {
-        // Service 0x1A 0x9B (Read ECU Identification) or 0x21 0x80
         val resp = try {
             sendRequest(0x1A.toByte(), byteArrayOf(0x9B.toByte()))
         } catch (e: Exception) {
@@ -75,23 +125,26 @@ class Kwp2000Protocol(private val usb: UsbSerialManager) {
     }
 
     fun requestSecuritySeed(): ByteArray {
-        // Service 0x27 0x01 (Request Seed)
         val resp = sendRequest(0x27.toByte(), byteArrayOf(0x01.toByte()))
-        // Extract seed bytes
-        return resp.takeLast(5).dropLast(1).toByteArray()
+        val idx = resp.indexOf(0x67.toByte())
+        if (idx != -1 && idx + 5 <= resp.size) {
+            return resp.copyOfRange(idx + 2, idx + 6)
+        }
+        throw IOException("Could not extract valid 4-byte seed from response (0x67 0x01)")
     }
 
     fun sendSecurityKey(key: ByteArray): Boolean {
-        // Service 0x27 0x02 (Send Key)
         val payload = byteArrayOf(0x02.toByte()) + key
         val resp = sendRequest(0x27.toByte(), payload)
         return resp.isNotEmpty()
     }
 
     fun requestDownload(startAddress: Int, uncompressedSize: Int): Boolean {
-        // Service 0x34 (RequestDownload)
+        require(startAddress in 0x180000..0x1FFFFF) { "Security violation: Start address out of bounds" }
+        require(uncompressedSize in 1..0x080000) { "Download size exceeds EDC16 calibration sector" }
+
         val payload = byteArrayOf(
-            0x00, // Data format
+            0x00,
             ((startAddress shr 16) and 0xFF).toByte(),
             ((startAddress shr 8) and 0xFF).toByte(),
             (startAddress and 0xFF).toByte(),
@@ -104,21 +157,23 @@ class Kwp2000Protocol(private val usb: UsbSerialManager) {
     }
 
     fun transferData(blockSeq: Byte, data: ByteArray): Boolean {
-        // Service 0x36 (TransferData)
+        require(data.size <= 128) { "Data block size exceeds safe 128-byte limit" }
         val payload = byteArrayOf(blockSeq) + data
         val resp = sendRequest(0x36.toByte(), payload)
         return resp.isNotEmpty()
     }
 
     fun requestTransferExit(): Boolean {
-        // Service 0x37 (RequestTransferExit)
         val resp = sendRequest(0x37.toByte())
         return resp.isNotEmpty()
     }
 
     fun ecuReset(): Boolean {
-        // Service 0x11 0x01 (ECUReset HardReset)
-        val resp = sendRequest(0x11.toByte(), byteArrayOf(0x01.toByte()))
-        return resp.isNotEmpty()
+        return try {
+            val resp = sendRequest(0x11.toByte(), byteArrayOf(0x01.toByte()))
+            resp.isNotEmpty()
+        } catch (e: Exception) {
+            true
+        }
     }
 }

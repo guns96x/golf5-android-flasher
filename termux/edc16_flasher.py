@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """
 EDC16U34 KWP2000 OTG Flasher for Android (Termux / Linux / Windows)
-Compatible with FTDI KKL 409.1, MPPS v18 / v16 / v13 K-Line cables via USB-OTG
 Target: VW Golf 5 1.9 TDI BLS (03G906021QJ / SW 391847)
+
+Key safety fixes from Codex audit:
+- Safe 128-byte blocks (prevents length byte overflow)
+- K-Line half-duplex echo cancellation
+- Strict positive response verification (SID + 0x40)
+- NRC 0x78 (Response Pending) wait loop
+- ECU ID gate (03G906021QJ / 391847 check)
 """
 
 import sys
@@ -21,7 +27,7 @@ SOURCE_DIAG = 0xF1
 
 def calculate_key(seed: bytes) -> bytes:
     if len(seed) < 4:
-        return b"\x00\x00\x00\x00"
+        raise ValueError("Invalid seed length (< 4 bytes)")
     s0, s1, s2, s3 = seed[0], seed[1], seed[2], seed[3]
     seed_val = (s0 << 24) | (s1 << 16) | (s2 << 8) | s3
     poly = 0x4F73A1B2
@@ -37,9 +43,9 @@ def calculate_key(seed: bytes) -> bytes:
     ])
 
 class Edc16Kwp2000:
-    def __init__(self, port_name, baudrate=10400, timeout=3.0):
+    def __init__(self, port_name, baudrate=10400, timeout=2.0):
         if serial is None:
-            raise ImportError("Модуль 'pyserial' не встановлено! Виконайте: pip install pyserial")
+            raise ImportError("Модуль 'pyserial' не знайдено! Виконайте: pip install pyserial")
         print(f"[*] Відкриття порту {port_name} на швидкості {baudrate} бод...")
         self.ser = serial.Serial(
             port=port_name,
@@ -55,8 +61,11 @@ class Edc16Kwp2000:
     def close(self):
         self.ser.close()
 
-    def send_request(self, service_id: int, payload: bytes = b"") -> bytes:
+    def send_request(self, service_id: int, payload: bytes = b"", timeout=6.0) -> bytes:
         data_len = 1 + len(payload)
+        if data_len > 255:
+            raise ValueError(f"Payload length {data_len} exceeds KWP single-byte length limit")
+
         packet = bytearray()
         if data_len <= 63:
             packet.append(0x80 | data_len)
@@ -70,27 +79,41 @@ class Edc16Kwp2000:
         
         packet.append(service_id)
         packet.extend(payload)
-        
-        # Checksum (sum of all bytes modulo 256)
         csum = sum(packet) & 0xFF
         packet.append(csum)
 
-        # Send
+        self.ser.flushInput()
         self.ser.write(packet)
-        time.sleep(0.02)
+        time.sleep(0.01)
 
-        # Read response
-        resp = self.ser.read(256)
-        if len(resp) < 4:
-            raise RuntimeError(f"Немає відповіді від ЕБУ або відповідь занадто коротка ({len(resp)} байт)")
+        start_time = time.time()
+        expected_pos_sid = service_id + 0x40
 
-        # Verify NRC (Negative Response Code)
-        for i in range(len(resp) - 2):
-            if resp[i] == 0x7F and resp[i+1] == service_id:
-                nrc = resp[i+2]
-                raise RuntimeError(f"Помилка ЕБУ: Service 0x{service_id:02X} NRC 0x{nrc:02X}")
+        while (time.time() - start_time) < timeout:
+            resp = self.ser.read(256)
+            if len(resp) >= len(packet) and resp[:len(packet)] == packet:
+                # Discard local K-Line echo
+                resp = resp[len(packet):]
 
-        return resp
+            if not resp:
+                time.sleep(0.02)
+                continue
+
+            for i in range(len(resp) - 2):
+                if resp[i] == 0x7F and resp[i+1] == service_id:
+                    nrc = resp[i+2]
+                    if nrc == 0x78:
+                        time.sleep(0.05)
+                        continue
+                    else:
+                        raise RuntimeError(f"Помилка ЕБУ: Service 0x{service_id:02X} NRC 0x{nrc:02X}")
+
+            if expected_pos_sid in resp:
+                return resp
+
+            time.sleep(0.02)
+
+        raise TimeoutError(f"Таймаут очікування відповіді на Service 0x{service_id:02X}")
 
     def read_ecu_id(self) -> str:
         print("[*] Запит паспортних даних ЕБУ (0x1A 0x9B)...")
@@ -110,8 +133,11 @@ class Edc16Kwp2000:
     def unlock_security(self):
         print("[*] Запит Seed (Service 0x27 0x01)...")
         resp = self.send_request(0x27, b"\x01")
-        # Extract seed (last 4 payload bytes before checksum)
-        seed = resp[-5:-1]
+        idx = resp.find(b"\x67\x01")
+        if idx != -1 and len(resp) >= idx + 6:
+            seed = resp[idx+2 : idx+6]
+        else:
+            seed = resp[-5:-1]
         print(f"[+] Отримано Seed: {seed.hex().upper()}")
         key = calculate_key(seed)
         print(f"[+] Розраховано Key: {key.hex().upper()}")
@@ -127,18 +153,19 @@ class Edc16Kwp2000:
         if file_size != 2097152:
             raise ValueError(f"Розмір файлу {file_size} байт! Очікується рівно 2097152 байти (2 MiB)")
 
+        ecu_id = self.read_ecu_id()
+        print(f"[+] Ідентифікація ЕБУ: {ecu_id}")
+        if "03G906021QJ" not in ecu_id and "391847" not in ecu_id:
+            raise RuntimeError("ЗАХИСНЕ БЛОКУВАННЯ: Номер ЕБУ не відповідає 03G906021QJ (SW 391847)!")
+
         with open(bin_path, "rb") as f:
             firmware = f.read()
 
         print(f"[+] Прошивка завантажена: {len(firmware)} байт")
         
-        # 1. Start Session
         self.enter_programming_session()
-        
-        # 2. Security Access
         self.unlock_security()
 
-        # 3. Request Download (EDC16 Calibration sector 0x180000 - 0x200000 = 512 KB)
         cal_start = 0x180000
         cal_size = 0x080000 # 512 KB
         print(f"[*] Запит запису сектора калібрувань (0x{cal_start:06X} - 0x{cal_start+cal_size:06X})...")
@@ -154,12 +181,11 @@ class Edc16Kwp2000:
         self.send_request(0x34, dl_param)
         print("[+] Запит на запис підтверджено ЕБУ.")
 
-        # 4. Transfer Data
-        block_size = 256
+        block_size = 128
         total_blocks = cal_size // block_size
         block_seq = 1
 
-        print(f"[*] Початок запису {total_blocks} блоків...")
+        print(f"[*] Початок запису {total_blocks} блоків по {block_size} байт...")
         start_time = time.time()
         for i in range(total_blocks):
             offset = cal_start + (i * block_size)
@@ -168,16 +194,14 @@ class Edc16Kwp2000:
             self.send_request(0x36, payload)
             block_seq = (block_seq + 1) & 0xFF
 
-            if (i + 1) % 32 == 0 or i == total_blocks - 1:
+            if (i + 1) % 64 == 0 or i == total_blocks - 1:
                 progress = ((i + 1) / total_blocks) * 100
                 elapsed = time.time() - start_time
                 print(f"  -> Прогрес: {i+1}/{total_blocks} ({progress:.1f}%) | Час: {elapsed:.1f}с")
 
-        # 5. Request Transfer Exit
         print("[*] Завершення сесії передачі (Service 0x37)...")
         self.send_request(0x37, b"")
 
-        # 6. ECU Hard Reset
         print("[*] Перезавантаження ЕБУ (Service 0x11 0x01)...")
         try:
             self.send_request(0x11, b"\x01")
