@@ -145,6 +145,31 @@ class Edc16Kwp2000:
         self.send_request(0x27, b"\x02" + key)
         print("[+] Захисний доступ надано успішно!")
 
+
+def fix_edc16_checksum(firmware_bytes: bytearray) -> bytearray:
+    """
+    Automatic Bosch EDC16U34 Checksum Recalculation (identical to MPPS v18 & WinOLS)
+    Enforces the mathematical invariant:
+    - Block 1 (0x180000..0x1BFFFF): 32-bit BE sum == 0xD01FE500 (patch at 0x1BFFFC)
+    - Block 2 (0x1C0000..0x1FDFFF): 32-bit BE sum == 0xD01FE500 (patch at 0x1FDFFC)
+    """
+    import struct
+    TARGET_SUM = 0xD01FE500
+    
+    b1_body = firmware_bytes[0x180000 : 0x1BFFFC]
+    s1_body = sum(struct.unpack(f">{len(b1_body)//4}I", b1_body)) & 0xFFFFFFFF
+    w1_needed = (TARGET_SUM - s1_body) & 0xFFFFFFFF
+    firmware_bytes[0x1BFFFC : 0x1C0000] = struct.pack(">I", w1_needed)
+
+    b2_body = firmware_bytes[0x1C0000 : 0x1FDFFC]
+    s2_body = sum(struct.unpack(f">{len(b2_body)//4}I", b2_body)) & 0xFFFFFFFF
+    w2_needed = (TARGET_SUM - s2_body) & 0xFFFFFFFF
+    firmware_bytes[0x1FDFFC : 0x1FE000] = struct.pack(">I", w2_needed)
+    
+    print("[✓] Контрольні суми EDC16 автоматично перераховані (як у MPPS v18):")
+    print(f"    Block 1 CS (0x1BFFFC): 0x{w1_needed:08X} | Block 2 CS (0x1FDFFC): 0x{w2_needed:08X}")
+    return firmware_bytes
+
     def flash_binary(self, bin_path: str):
         if not os.path.isfile(bin_path):
             raise FileNotFoundError(f"Файл {bin_path} не знайдено!")
@@ -159,7 +184,8 @@ class Edc16Kwp2000:
             raise RuntimeError("ЗАХИСНЕ БЛОКУВАННЯ: Номер ЕБУ не відповідає 03G906021QJ (SW 391847)!")
 
         with open(bin_path, "rb") as f:
-            firmware = f.read()
+            raw_bytes = bytearray(f.read())
+        firmware = fix_edc16_checksum(raw_bytes)
 
         print(f"[+] Прошивка завантажена: {len(firmware)} байт")
         
