@@ -20,6 +20,14 @@ Tests:
 Notes:
 - Implemented immutable KwpFrame, KwpFrameCodec (encodeRequest, parseResponse, stripLeadingEcho, extractFrame), and refactored Kwp2000Protocol to accumulate frames and handle NRC 0x78 properly.
 
+## Task 3: Extract exact ECU firmware profile and checksum engine
+Commit: 1df59c77689fa3ef52cb331624b3348afa94c529
+Tests:
+- ./gradlew testDebugUnitTest -> PASS
+- ./gradlew assembleDebug -> PASS
+Notes:
+- Extracted EcuFirmwareProfile and Edc16ChecksumEngine with fix/verify methods. Tested non-mutation of input, declared block residue calculations, and bounds validation. Replaced embedded fixEdc16Checksum in EcuFlasher.
+
 
 ## Rules
 

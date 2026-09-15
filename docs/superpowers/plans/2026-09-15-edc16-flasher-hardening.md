@@ -280,7 +280,7 @@ git commit -m "fix: strictly parse KWP2000 frames"
 **Interfaces:**
 - Produces: `EcuFirmwareProfile.EDC16U34_03G906021QJ_391847`, `ChecksumVerification`, `Edc16ChecksumEngine.fix`, `verify`.
 
-- [ ] **Step 1: Write failing checksum tests**
+- [x] **Step 1: Write failing checksum tests**
 
 Generate a synthetic 2 MiB image entirely in memory. Set deterministic 32-bit words in the two covered checksum blocks. Assert:
 
@@ -292,7 +292,7 @@ Generate a synthetic 2 MiB image entirely in memory. Set deterministic 32-bit wo
 @Test fun bytesOutsideDeclaredChecksumBlocksAreUnchanged()
 ```
 
-- [ ] **Step 2: Create exact profile types**
+- [x] **Step 2: Create exact profile types**
 
 ```kotlin
 data class ChecksumBlock(
@@ -326,17 +326,17 @@ data class EcuFirmwareProfile(
 }
 ```
 
-- [ ] **Step 3: Implement pure engine**
+- [x] **Step 3: Implement pure engine**
 
 `fix()` copies input first, excludes the patch word from the body sum, writes the required big-endian 32-bit patch word, then calls `verify()` and throws if verification is not fully valid.
 
 `verify()` returns each block's observed residue and boolean validity.
 
-- [ ] **Step 4: Remove checksum math from `EcuFlasher`**
+- [x] **Step 4: Remove checksum math from `EcuFlasher`**
 
 Delete the old `fixEdc16Checksum` implementation after all callers use `Edc16ChecksumEngine`.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 ```bash
 ./gradlew testDebugUnitTest
