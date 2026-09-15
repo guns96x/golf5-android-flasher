@@ -1,12 +1,20 @@
 package com.golf5.edc16flasher.protocol
 
+import com.golf5.edc16flasher.firmware.EcuFirmwareProfile
 import com.golf5.edc16flasher.firmware.Edc16ChecksumEngine
+import com.golf5.edc16flasher.security.LegacyBlsSecurityAlgorithm
+import com.golf5.edc16flasher.security.SecurityAccessAlgorithm
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 
-class EcuFlasher(private val protocol: Kwp2000Protocol) {
+class EcuFlasher(
+    private val protocol: Kwp2000Protocol,
+    private val profile: EcuFirmwareProfile = EcuFirmwareProfile.EDC16U34_03G906021QJ_391847,
+    private val checksumEngine: Edc16ChecksumEngine = Edc16ChecksumEngine,
+    private val security: SecurityAccessAlgorithm = LegacyBlsSecurityAlgorithm,
+) {
 
     /**
      * Standard MPPS Write with Automatic Checksum Correction & Safety Gates
@@ -40,7 +48,7 @@ class EcuFlasher(private val protocol: Kwp2000Protocol) {
 
             onProgress(12, "[MPPS] Авторизація доступу Security Access (0x27)...")
             val seed = protocol.requestSecuritySeed()
-            val key = Edc16Security.calculateKey(seed)
+            val key = security.calculateKey(seed)
             protocol.sendSecurityKey(key)
 
             onProgress(15, "[MPPS] Запит запису калібровок (0x180000 - 0x200000)...")
@@ -102,7 +110,7 @@ class EcuFlasher(private val protocol: Kwp2000Protocol) {
 
             onProgress(10, "[RECOVERY] Зняття захисту Seed/Key...")
             val seed = protocol.requestSecuritySeed()
-            val key = Edc16Security.calculateKey(seed)
+            val key = security.calculateKey(seed)
             protocol.sendSecurityKey(key)
 
             onProgress(15, "[RECOVERY] Запис сектора калібрувань...")
