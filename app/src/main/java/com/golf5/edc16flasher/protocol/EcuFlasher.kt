@@ -1,42 +1,12 @@
 package com.golf5.edc16flasher.protocol
 
+import com.golf5.edc16flasher.firmware.Edc16ChecksumEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.IOException
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 class EcuFlasher(private val protocol: Kwp2000Protocol) {
-
-    /**
-     * Automatic Bosch EDC16U34 Checksum Recalculation (identical to MPPS v18 & WinOLS)
-     * Mathematical invariant:
-     * - Block 1 (0x180000..0x1BFFFF): 32-bit BE sum == 0xD01FE500 (patch at 0x1BFFFC)
-     * - Block 2 (0x1C0000..0x1FDFFF): 32-bit BE sum == 0xD01FE500 (patch at 0x1FDFFC)
-     */
-    fun fixEdc16Checksum(data: ByteArray): ByteArray {
-        val targetSum = 0xD01FE500L
-        val buf = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN)
-
-        // Block 1: 0x180000 until 0x1BFFFC
-        var s1Body = 0L
-        for (addr in 0x180000 until 0x1BFFFC step 4) {
-            s1Body = (s1Body + (buf.getInt(addr).toLong() and 0xFFFFFFFFL)) and 0xFFFFFFFFL
-        }
-        val w1Needed = ((targetSum - s1Body) and 0xFFFFFFFFL).toInt()
-        buf.putInt(0x1BFFFC, w1Needed)
-
-        // Block 2: 0x1C0000 until 0x1FDFFC
-        var s2Body = 0L
-        for (addr in 0x1C0000 until 0x1FDFFC step 4) {
-            s2Body = (s2Body + (buf.getInt(addr).toLong() and 0xFFFFFFFFL)) and 0xFFFFFFFFL
-        }
-        val w2Needed = ((targetSum - s2Body) and 0xFFFFFFFFL).toInt()
-        buf.putInt(0x1FDFFC, w2Needed)
-
-        return data
-    }
 
     /**
      * Standard MPPS Write with Automatic Checksum Correction & Safety Gates
@@ -53,7 +23,7 @@ class EcuFlasher(private val protocol: Kwp2000Protocol) {
             }
 
             onProgress(2, "[MPPS] Автоматичний перерахунок КС (інваріант 0xD01FE500)...")
-            val firmwareBytes = fixEdc16Checksum(rawBytes.copyOf())
+            val firmwareBytes = Edc16ChecksumEngine.fix(rawBytes)
             onProgress(4, "[MPPS] Контрольна сума валідна (Checksum OK)!")
 
             onProgress(6, "[MPPS] Перевірка ідентифікатора ЕБУ...")
@@ -126,7 +96,7 @@ class EcuFlasher(private val protocol: Kwp2000Protocol) {
                 return@withContext false
             }
 
-            val firmwareBytes = fixEdc16Checksum(rawBytes.copyOf())
+            val firmwareBytes = Edc16ChecksumEngine.fix(rawBytes)
             onProgress(5, "[RECOVERY] Примусова активація сесії програмування...")
             protocol.forceRecoverySession()
 
