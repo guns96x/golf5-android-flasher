@@ -36,6 +36,35 @@ Tests:
 Notes:
 - Extracted SecurityAccessAlgorithm interface. Wrapped legacy BLS formula as LegacyBlsSecurityAlgorithm with verified = false. Created MockSecurityAlgorithm with verified = true for emulator testing. Injected SecurityAccessAlgorithm into EcuFlasher.
 
+## Task 5: Complete the offline EDC16 emulator write state machine
+Commit: 8692c162e6b980b23009e602f2b4889abaf7b599
+Tests:
+- ./gradlew testDebugUnitTest -> PASS (27 tests)
+- ./gradlew assembleDebug -> PASS
+Notes:
+- Fixed nrc78Count handling: emit all NRC 0x78 frames first, then fall through to the real response handler instead of returning early. This allows Kwp2000Protocol to drain NRC 0x78 frames from rxQueue and then receive the positive response without retransmitting.
+
+## Task 6: Isolate MPPS authentication and reject unknown challenges
+Commit: 00e563a (run `git rev-parse HEAD` for full SHA)
+Tests:
+- ./gradlew testDebugUnitTest -> PASS (32 tests)
+- ./gradlew assembleDebug -> PASS
+Notes:
+- Created MppsAuthenticator object with only 2 proven captured vectors (1EB987D7->65E3DBEE, DB0B83ED->51D6EC90).
+- Generic fallback formula (0x78D3035C/0x3F30029D) removed from verified path; preserved in git history only.
+- MppsHardwareTransport.computeChallengeResponse now delegates to MppsAuthenticator; throws MppsAuthenticationUnverifiedException on unknown challenges.
+- Added mppsAuthVerified: Boolean property on MppsHardwareTransport; reset to false on close().
+
+## Task 7: Add typed flash eligibility and full verified transaction
+Commit: 6b572cb (run `git rev-parse HEAD` for full SHA)
+Tests:
+- ./gradlew testDebugUnitTest -> PASS (all tests)
+- ./gradlew assembleDebug -> PASS
+Notes:
+- Created FlashEligibility.kt: pure evaluateEligibility() with all 9 refusal reasons. Physical gates (voltage, MPPS auth, backup, ECU ID) skipped for emulator path. Recovery mode bypasses ECU ID mismatch only; all other gates enforced.
+- Created FlashTransaction.kt: FlashProtocol interface (no Android deps), backup-first orchestration, SHA-256 read-back verification before ECU reset, typed FlashResult (Success/Refused/Failed with stage).
+- Fixed test compile error: FakeProtocol and transferData must be open to allow anonymous subclassing in backupIsCalledBeforeFirstTransfer test.
+
 
 ## Rules
 
