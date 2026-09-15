@@ -2,7 +2,16 @@
 
 Plan: `docs/superpowers/plans/2026-09-15-edc16-flasher-hardening.md`
 
-Status: `NOT_STARTED`
+Status: `IN_PROGRESS`
+
+## Task 1: Add JVM test harness and pure transport boundary
+Commit: 51e412b5843f82136c26a413fd744b3af5491fec
+Tests:
+- ./gradlew testDebugUnitTest -> PASS
+- ./gradlew assembleDebug -> PASS
+Notes:
+- Pure KwpTransport interface extracted and implemented by IUsbTransport and UsbSerialManager. Default values removed from overriding functions in IUsbTransport.
+
 
 ## Rules
 

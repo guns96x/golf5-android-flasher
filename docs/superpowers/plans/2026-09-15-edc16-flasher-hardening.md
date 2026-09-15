@@ -84,7 +84,7 @@
 **Interfaces:**
 - Produces: `KwpTransport` consumed by Tasks 2, 5 and 6.
 
-- [ ] **Step 1: Add local test dependencies**
+- [x] **Step 1: Add local test dependencies**
 
 Add to `dependencies` in `app/build.gradle.kts`:
 
@@ -93,7 +93,7 @@ testImplementation("junit:junit:4.13.2")
 testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 ```
 
-- [ ] **Step 2: Create the transport contract**
+- [x] **Step 2: Create the transport contract**
 
 Create `KwpTransport.kt` exactly around protocol I/O, not lifecycle/discovery:
 
@@ -112,15 +112,15 @@ interface KwpTransport {
 }
 ```
 
-- [ ] **Step 3: Make `IUsbTransport` extend `KwpTransport`**
+- [x] **Step 3: Make `IUsbTransport` extend `KwpTransport`**
 
 Keep `open`, `close`, `isConnected`, `runDiagnostic` on `IUsbTransport`. Add default `isPhysical = true`. `MockEdc16Transport` must override `isPhysical = false` in Task 5.
 
-- [ ] **Step 4: Make `UsbSerialManager` implement `KwpTransport` by delegation**
+- [x] **Step 4: Make `UsbSerialManager` implement `KwpTransport` by delegation**
 
 Do not expose `activeTransport` publicly. Implement each protocol method by delegating to `activeTransport` or throwing `IOException("USB Transport is not open")`.
 
-- [ ] **Step 5: Add a smoke test with a fake transport**
+- [x] **Step 5: Add a smoke test with a fake transport**
 
 ```kotlin
 class KwpTransportSmokeTest {
@@ -147,13 +147,13 @@ class KwpTransportSmokeTest {
 }
 ```
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 6: Run tests**
 
 Run: `./gradlew testDebugUnitTest`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add app/build.gradle.kts app/src/main/java/com/golf5/edc16flasher/protocol/KwpTransport.kt app/src/main/java/com/golf5/edc16flasher/usb/IUsbTransport.kt app/src/main/java/com/golf5/edc16flasher/usb/UsbSerialManager.kt app/src/test/java/com/golf5/edc16flasher/protocol/KwpTransportSmokeTest.kt
