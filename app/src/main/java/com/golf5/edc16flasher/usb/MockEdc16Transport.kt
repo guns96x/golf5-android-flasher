@@ -1,34 +1,56 @@
 package com.golf5.edc16flasher.usb
 
 import android.content.Context
-import android.util.Log
+import com.golf5.edc16flasher.protocol.KwpFrameCodec
+import com.golf5.edc16flasher.security.MockSecurityAlgorithm
 import java.io.IOException
 import java.util.concurrent.ConcurrentLinkedQueue
 
+data class MockFaults(
+    var nrc78Count: Int = 0,
+    var disconnectAtBlock: Int = -1,
+    var voltageDropAtBlock: Int = -1,
+    var droppedVoltage: Float = 11.5f,
+)
+
+data class UploadState(
+    val start: Int,
+    val size: Int,
+    var cursor: Int,
+    val blockSize: Int,
+)
+
+data class DownloadState(
+    val start: Int,
+    val size: Int,
+    var cursor: Int,
+    val blockSize: Int,
+    var expectedSequence: Int,
+    var bytesTransferred: Int,
+)
+
 /**
  * Built-in EDC16U34 & MPPS V18 Mock Transport
- * Emulates the complete Bosch EDC16U34 KWP2000 protocol (ISO 14230) in memory
- * using the embedded 2 MiB 03G906021QJ flash binary.
- * 
- * Allows 100% offline verification of:
- * - Identification (ECU ID: 03G906021QJ / SW 391847)
- * - Security Access (Seed/Key 0x27)
- * - 512 KB Calibration Reading (RequestUpload 0x35 + 4,096 blocks of 0x36)
- * - Checksum Verification & Backup File Saving
+ * Stateful in-memory ECU emulator.
  */
-class MockEdc16Transport(private val context: Context) : IUsbTransport {
+class MockEdc16Transport(private val context: Context? = null) : IUsbTransport {
 
     private var isOpen = false
     private val rxQueue = ConcurrentLinkedQueue<Byte>()
-    private var flashMemory: ByteArray = ByteArray(2097152)
+    private var flashMemory: ByteArray = ByteArray(2097152) { 0xFF.toByte() }
 
-    private var uploadActive = false
-    private var uploadOffset = 0x180000
-    private var uploadBlockSize = 128
+    private var uploadState: UploadState? = null
+    private var downloadState: DownloadState? = null
+    private var securityUnlocked = false
     private var lastSeed = byteArrayOf(0x12, 0x34, 0x56, 0x78)
+    private var currentVoltage = 13.8f
+    private var faults = MockFaults()
 
     override val isConnected: Boolean
         get() = isOpen
+
+    override val isPhysical: Boolean
+        get() = false
 
     override val isMpps: Boolean
         get() = true
@@ -37,37 +59,39 @@ class MockEdc16Transport(private val context: Context) : IUsbTransport {
         get() = "Емуляція EDC16U34 (Offline Тест)"
 
     override fun open(baudRate: Int): Boolean {
-        try {
-            val assetStream = context.assets.open("03G906021QJ_stage1_refined_CS_OK.bin")
-            flashMemory = assetStream.use { it.readBytes() }
-            Log.i(TAG, "MockEdc16Transport: Loaded asset flash binary (${flashMemory.size} bytes)")
-        } catch (e: Exception) {
-            Log.w(TAG, "MockEdc16Transport: Could not load asset binary, using blank 2MB memory: ${e.message}")
+        if (context != null) {
+            try {
+                val assetStream = context.assets.open("03G906021QJ_stage1_refined_CS_OK.bin")
+                flashMemory = assetStream.use { it.readBytes() }
+            } catch (e: Exception) {
+                flashMemory = ByteArray(2097152) { 0xFF.toByte() }
+            }
+        } else {
             flashMemory = ByteArray(2097152) { 0xFF.toByte() }
         }
         isOpen = true
         rxQueue.clear()
-        uploadActive = false
-        uploadOffset = 0x180000
-        Log.i(TAG, "MockEdc16Transport opened successfully. Virtual OBD2 Voltage: 13.8V")
+        uploadState = null
+        downloadState = null
+        securityUnlocked = false
+        faults = MockFaults()
         return true
     }
 
     override fun close() {
         isOpen = false
         rxQueue.clear()
-        uploadActive = false
-        Log.i(TAG, "MockEdc16Transport closed.")
+        uploadState = null
+        downloadState = null
     }
 
     override fun getBatteryVoltage(): Float? {
-        return if (isOpen) 13.8f else null
+        return if (isOpen) currentVoltage else null
     }
 
     override fun write(data: ByteArray, timeoutMs: Int) {
         if (!isOpen) throw IOException("Transport is not open")
 
-        // Check if data is encapsulated in MPPS K-Line framing: 0x25 0x02 <len_LE_2B> 0x00 <kwp_data>
         val kwpData = if (data.size >= 5 && data[0] == 0x25.toByte() && data[1] == 0x02.toByte()) {
             data.copyOfRange(5, data.size)
         } else {
@@ -98,8 +122,10 @@ class MockEdc16Transport(private val context: Context) : IUsbTransport {
     override fun sendFastInit(pulseMs: Int, initialPayload: ByteArray) {
         if (!isOpen) return
         rxQueue.clear()
-        // Respond with KWP fast-init positive response: 83 F1 01 C1 EA 8F 89
-        val resp = byteArrayOf(0x83.toByte(), 0xF1.toByte(), 0x01.toByte(), 0xC1.toByte(), 0xEA.toByte(), 0x8F.toByte(), 0x89.toByte())
+        val resp = byteArrayOf(
+            0x83.toByte(), 0xF1.toByte(), 0x01.toByte(),
+            0xC1.toByte(), 0xEA.toByte(), 0x8F.toByte(), 0x89.toByte()
+        )
         for (b in resp) rxQueue.add(b)
     }
 
@@ -107,122 +133,215 @@ class MockEdc16Transport(private val context: Context) : IUsbTransport {
         return "03G906021QJ 391847 (Емуляція Bosch EDC16U34)"
     }
 
+    internal fun snapshot(start: Int, size: Int): ByteArray {
+        return flashMemory.copyOfRange(start, start + size)
+    }
+
+    internal fun setVoltageForTest(voltage: Float) {
+        currentVoltage = voltage
+    }
+
+    internal fun configureFaults(faults: MockFaults) {
+        this.faults = faults
+    }
+
+    private fun emitFrame(sid: Int, payload: ByteArray) {
+        val dataLen = 1 + payload.size
+        val headerLen = if (dataLen <= 63) 3 else 4
+        val total = headerLen + dataLen + 1
+        val frame = ByteArray(total)
+        if (dataLen <= 63) {
+            frame[0] = (0x80 or dataLen).toByte()
+            frame[1] = 0xF1.toByte()
+            frame[2] = 0x01.toByte()
+            frame[3] = (sid and 0xFF).toByte()
+            System.arraycopy(payload, 0, frame, 4, payload.size)
+        } else {
+            frame[0] = 0x80.toByte()
+            frame[1] = 0xF1.toByte()
+            frame[2] = 0x01.toByte()
+            frame[3] = (dataLen and 0xFF).toByte()
+            frame[4] = (sid and 0xFF).toByte()
+            System.arraycopy(payload, 0, frame, 5, payload.size)
+        }
+        frame[total - 1] = KwpFrameCodec.computeChecksum(frame, total - 1)
+        for (b in frame) rxQueue.add(b)
+    }
+
+    private fun emitNegative(sid: Int, nrc: Int) {
+        emitFrame(0x7F, byteArrayOf((sid and 0xFF).toByte(), (nrc and 0xFF).toByte()))
+    }
+
     private fun processKwpRequest(frame: ByteArray) {
-        if (frame.size < 4) return
+        if (frame.size < 5) return
 
         val fmt = frame[0].toInt() and 0xFF
-        val pos = if (fmt == 0x80) 4 else 3
-        if (pos >= frame.size - 1) return
+        val headerLen = if ((fmt and 0x3F) != 0) 3 else 4
+        if (headerLen >= frame.size - 1) return
 
-        val sid = frame[pos].toInt() and 0xFF
-        val payload = frame.copyOfRange(pos + 1, frame.size - 1)
+        val sid = frame[headerLen].toInt() and 0xFF
+        val payload = frame.copyOfRange(headerLen + 1, frame.size - 1)
 
-        val respSid = (sid + 0x40) and 0xFF
-        val respPayload = mutableListOf<Byte>()
+        if (faults.nrc78Count > 0) {
+            val count = faults.nrc78Count
+            faults.nrc78Count = 0
+            for (i in 0 until count) {
+                emitNegative(sid, 0x78)
+            }
+        }
 
         when (sid) {
-            // 0x10: Start Diagnostic Session
-            0x10 -> {
+            0x10 -> { // Start Diagnostic Session
                 val sub = if (payload.isNotEmpty()) payload[0] else 0x81.toByte()
-                respPayload.add(sub)
-                respPayload.addAll(listOf(0x00, 0x32, 0x01, 0xF4.toByte()))
+                emitFrame(0x50, byteArrayOf(sub, 0x00, 0x32, 0x01, 0xF4.toByte()))
             }
-            // 0x1A: Read ECU Identification
-            0x1A -> {
+            0x1A -> { // Read ECU Identification
                 val sub = if (payload.isNotEmpty()) payload[0].toInt() and 0xFF else 0x9B
-                respPayload.add(sub.toByte())
                 val idStr = when (sub) {
                     0x9B -> "03G906021QJ "
                     0x97 -> "391847"
                     0x90 -> "WVWZZZ1KZ7P123456"
                     else -> "EDC16U34"
                 }
-                for (b in idStr.toByteArray()) respPayload.add(b)
+                emitFrame(0x5A, byteArrayOf(sub.toByte()) + idStr.toByteArray())
             }
-            // 0x21: Read Data By Local Identifier
-            0x21 -> {
+            0x21 -> { // Read Data By Local Identifier
                 val sub = if (payload.isNotEmpty()) payload[0] else 0x80.toByte()
-                respPayload.add(sub)
-                for (b in "03G906021QJ 391847 EDC16U34".toByteArray()) respPayload.add(b)
+                emitFrame(0x61, byteArrayOf(sub) + "03G906021QJ 391847 EDC16U34".toByteArray())
             }
-            // 0x27: Security Access
-            0x27 -> {
+            0x27 -> { // Security Access
                 val sub = if (payload.isNotEmpty()) payload[0].toInt() and 0xFF else 0x01
-                respPayload.add(sub.toByte())
                 if (sub == 0x01) {
-                    // Return 4-byte seed
-                    for (b in lastSeed) respPayload.add(b)
-                }
-            }
-            // 0x35: Request Upload (Reading calibration)
-            0x35 -> {
-                uploadActive = true
-                uploadOffset = 0x180000
-                uploadBlockSize = 128
-                // Return block size 128 (0x00 0x80)
-                respPayload.add(0x00)
-                respPayload.add(0x80.toByte())
-            }
-            // 0x36: Transfer Data
-            0x36 -> {
-                val blockSeq = if (payload.isNotEmpty()) payload[0] else 0x01.toByte()
-                respPayload.add(blockSeq)
-                if (uploadActive) {
-                    // Serve 128 bytes from flashMemory at uploadOffset
-                    val chunk = if (uploadOffset + uploadBlockSize <= flashMemory.size) {
-                        flashMemory.copyOfRange(uploadOffset, uploadOffset + uploadBlockSize)
+                    emitFrame(0x67, byteArrayOf(0x01.toByte()) + lastSeed)
+                } else if (sub == 0x02) {
+                    val key = payload.copyOfRange(1, payload.size)
+                    val expectedKey = MockSecurityAlgorithm.calculateKey(lastSeed)
+                    if (key.contentEquals(expectedKey)) {
+                        securityUnlocked = true
+                        emitFrame(0x67, byteArrayOf(0x02.toByte()))
                     } else {
-                        ByteArray(uploadBlockSize) { 0xFF.toByte() }
+                        emitNegative(0x27, 0x35) // Invalid Key
                     }
-                    uploadOffset += uploadBlockSize
-                    for (b in chunk) respPayload.add(b)
+                } else {
+                    emitNegative(0x27, 0x12) // Subfunction Not Supported
                 }
             }
-            // 0x34: Request Download (Writing calibration)
-            0x34 -> {
-                respPayload.add(0x00)
-                respPayload.add(0x80.toByte())
+            0x34 -> { // Request Download
+                if (payload.size < 7) {
+                    emitNegative(0x34, 0x13) // Incorrect Message Length
+                    return
+                }
+                val startAddress = ((payload[1].toInt() and 0xFF) shl 16) or
+                        ((payload[2].toInt() and 0xFF) shl 8) or
+                        (payload[3].toInt() and 0xFF)
+                val uncompressedSize = ((payload[4].toInt() and 0xFF) shl 16) or
+                        ((payload[5].toInt() and 0xFF) shl 8) or
+                        (payload[6].toInt() and 0xFF)
+
+                if (startAddress < 0x180000 || startAddress + uncompressedSize > 0x200000 || uncompressedSize <= 0) {
+                    emitNegative(0x34, 0x31) // Request Out Of Range
+                    return
+                }
+
+                downloadState = DownloadState(
+                    start = startAddress,
+                    size = uncompressedSize,
+                    cursor = startAddress,
+                    blockSize = 128,
+                    expectedSequence = 1,
+                    bytesTransferred = 0,
+                )
+                emitFrame(0x74, byteArrayOf(0x00, 0x80.toByte()))
             }
-            // 0x37: Request Transfer Exit
-            0x37 -> {
-                uploadActive = false
+            0x35 -> { // Request Upload
+                if (payload.size < 7) {
+                    emitNegative(0x35, 0x13)
+                    return
+                }
+                val startAddress = ((payload[1].toInt() and 0xFF) shl 16) or
+                        ((payload[2].toInt() and 0xFF) shl 8) or
+                        (payload[3].toInt() and 0xFF)
+                val uncompressedSize = ((payload[4].toInt() and 0xFF) shl 16) or
+                        ((payload[5].toInt() and 0xFF) shl 8) or
+                        (payload[6].toInt() and 0xFF)
+
+                uploadState = UploadState(
+                    start = startAddress,
+                    size = uncompressedSize,
+                    cursor = startAddress,
+                    blockSize = 128,
+                )
+                emitFrame(0x75, byteArrayOf(0x00, 0x80.toByte()))
             }
-            // 0x14: Clear DTC
-            0x14 -> {
+            0x36 -> { // Transfer Data
+                if (downloadState != null) {
+                    val currentDownload = downloadState!!
+                    if (faults.disconnectAtBlock == currentDownload.expectedSequence) {
+                        close()
+                        return
+                    }
+                    if (faults.voltageDropAtBlock == currentDownload.expectedSequence) {
+                        currentVoltage = faults.droppedVoltage
+                    }
+                    val blockSeq = if (payload.isNotEmpty()) payload[0].toInt() and 0xFF else -1
+                    if (blockSeq != currentDownload.expectedSequence) {
+                        emitNegative(0x36, 0x24) // Sequence Error
+                        return
+                    }
+
+                    val dataChunk = payload.copyOfRange(1, payload.size)
+                    if (currentDownload.bytesTransferred + dataChunk.size > currentDownload.size) {
+                        emitNegative(0x36, 0x31) // Request Out Of Range
+                        return
+                    }
+
+                    System.arraycopy(dataChunk, 0, flashMemory, currentDownload.cursor, dataChunk.size)
+                    currentDownload.cursor += dataChunk.size
+                    currentDownload.bytesTransferred += dataChunk.size
+                    currentDownload.expectedSequence = (currentDownload.expectedSequence + 1) and 0xFF
+
+                    emitFrame(0x76, byteArrayOf(blockSeq.toByte()))
+                } else if (uploadState != null) {
+                    val currentUpload = uploadState!!
+                    val blockSeq = if (payload.isNotEmpty()) payload[0] else 0x01.toByte()
+                    val remaining = currentUpload.start + currentUpload.size - currentUpload.cursor
+                    val chunkSize = minOf(currentUpload.blockSize, remaining)
+                    val chunk = if (chunkSize > 0 && currentUpload.cursor + chunkSize <= flashMemory.size) {
+                        flashMemory.copyOfRange(currentUpload.cursor, currentUpload.cursor + chunkSize)
+                    } else {
+                        ByteArray(chunkSize) { 0xFF.toByte() }
+                    }
+                    currentUpload.cursor += chunkSize
+                    emitFrame(0x76, byteArrayOf(blockSeq) + chunk)
+                } else {
+                    emitNegative(0x36, 0x22) // Conditions Not Correct
+                }
             }
-            // 0x11: ECU Reset
-            0x11 -> {
-                respPayload.add(0x01)
+            0x37 -> { // Request Transfer Exit
+                if (downloadState != null) {
+                    val currentDownload = downloadState!!
+                    if (currentDownload.bytesTransferred != currentDownload.size) {
+                        emitNegative(0x37, 0x22) // Conditions Not Correct (Incomplete)
+                    } else {
+                        downloadState = null
+                        emitFrame(0x77, ByteArray(0))
+                    }
+                } else if (uploadState != null) {
+                    uploadState = null
+                    emitFrame(0x77, ByteArray(0))
+                } else {
+                    emitFrame(0x77, ByteArray(0))
+                }
+            }
+            0x14 -> { // Clear DTC
+                emitFrame(0x54, ByteArray(0))
+            }
+            0x11 -> { // ECU Reset
+                emitFrame(0x51, byteArrayOf(0x01))
             }
             else -> {
-                respPayload.add(0x00)
+                emitNegative(sid, 0x11) // Service Not Supported
             }
-        }
-
-        // Frame building
-        val dataLen = 1 + respPayload.size
-        val respFrame = mutableListOf<Byte>()
-        if (dataLen <= 63) {
-            respFrame.add((0x80 or dataLen).toByte())
-            respFrame.add(0xF1.toByte()) // To tester
-            respFrame.add(0x01.toByte()) // From ECU
-        } else {
-            respFrame.add(0x80.toByte())
-            respFrame.add(0xF1.toByte())
-            respFrame.add(0x01.toByte())
-            respFrame.add(dataLen.toByte())
-        }
-        respFrame.add(respSid.toByte())
-        respFrame.addAll(respPayload)
-
-        var cs: Byte = 0
-        for (b in respFrame) {
-            cs = (cs + b).toByte()
-        }
-        respFrame.add(cs)
-
-        for (b in respFrame) {
-            rxQueue.add(b)
         }
     }
 
@@ -232,11 +351,6 @@ class MockEdc16Transport(private val context: Context) : IUsbTransport {
                 "Model: Bosch EDC16U34 (VW Golf 5 1.9 TDI BLS)\n" +
                 "VAG SW: 03G906021QJ | Bosch SW: 391847\n" +
                 "Calibration: 0x180000..0x200000 (512 KB)\n" +
-                "Checksums: 0xD01FE500 [VALID]\n" +
-                "Virtual Battery: 13.8V"
-    }
-
-    companion object {
-        private const val TAG = "MOCK_EDC16"
+                "Virtual Battery: ${currentVoltage}V"
     }
 }
