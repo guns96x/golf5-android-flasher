@@ -1,15 +1,15 @@
 package com.golf5.edc16flasher.usb
 
-interface IUsbTransport {
+import com.golf5.edc16flasher.protocol.KwpTransport
+
+interface IUsbTransport : KwpTransport {
     val isConnected: Boolean
-    val isMpps: Boolean
-    val transportName: String
-    
+    override val isPhysical: Boolean
+        get() = true
+
     fun open(baudRate: Int = 10400): Boolean
     fun close()
-    fun write(data: ByteArray, timeoutMs: Int = 2000)
-    fun read(buffer: ByteArray, timeoutMs: Int = 2000): Int
-    fun getBatteryVoltage(): Float? = null
-    fun sendFastInit(pulseMs: Int = 25, initialPayload: ByteArray = ByteArray(0)) = Unit
+    override fun getBatteryVoltage(): Float? = null
+    override fun sendFastInit(pulseMs: Int, initialPayload: ByteArray) = Unit
     fun runDiagnostic(): String = "Not supported on this transport"
 }

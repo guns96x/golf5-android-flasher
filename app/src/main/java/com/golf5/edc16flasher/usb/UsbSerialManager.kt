@@ -14,6 +14,7 @@ import com.hoho.android.usbserial.driver.ProbeTable
 import com.hoho.android.usbserial.driver.ProlificSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialProber
+import com.golf5.edc16flasher.protocol.KwpTransport
 import java.io.IOException
 
 /**
@@ -21,17 +22,20 @@ import java.io.IOException
  * Seamlessly auto-detects and drives MPPS v18 Hardware (0x1C43:0x0500)
  * and generic K-Line KKL interfaces (FTDI, CH340, CP2102).
  */
-class UsbSerialManager(private val context: Context) {
+class UsbSerialManager(private val context: Context) : KwpTransport {
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
     private var activeTransport: IUsbTransport? = null
 
     val isConnected: Boolean
         get() = activeTransport != null && activeTransport!!.isConnected
 
-    val isMpps: Boolean
+    override val isPhysical: Boolean
+        get() = activeTransport?.isPhysical ?: false
+
+    override val isMpps: Boolean
         get() = activeTransport?.isMpps == true
 
-    val transportName: String
+    override val transportName: String
         get() = activeTransport?.transportName ?: "Не підключено"
 
     fun getRawDevices(): Collection<UsbDevice> = usbManager.deviceList.values
@@ -132,19 +136,19 @@ class UsbSerialManager(private val context: Context) {
         }
     }
 
-    fun write(data: ByteArray, timeoutMs: Int = 2000) {
+    override fun write(data: ByteArray, timeoutMs: Int) {
         activeTransport?.write(data, timeoutMs) ?: throw IOException("USB Transport is not open")
     }
 
-    fun read(buffer: ByteArray, timeoutMs: Int = 2000): Int {
+    override fun read(buffer: ByteArray, timeoutMs: Int): Int {
         return activeTransport?.read(buffer, timeoutMs) ?: throw IOException("USB Transport is not open")
     }
 
-    fun sendFastInit(pulseMs: Int = 25, initialPayload: ByteArray = ByteArray(0)) {
+    override fun sendFastInit(pulseMs: Int, initialPayload: ByteArray) {
         activeTransport?.sendFastInit(pulseMs, initialPayload)
     }
 
-    fun getBatteryVoltage(): Float? {
+    override fun getBatteryVoltage(): Float? {
         return activeTransport?.getBatteryVoltage()
     }
 
