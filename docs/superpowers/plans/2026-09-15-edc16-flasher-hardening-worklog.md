@@ -12,6 +12,14 @@ Tests:
 Notes:
 - Pure KwpTransport interface extracted and implemented by IUsbTransport and UsbSerialManager. Default values removed from overriding functions in IUsbTransport.
 
+## Task 2: Replace raw SID scanning with strict KWP frame codec
+Commit: 2d475943a97bb82dd5e29c802d2a919f4936f9fd
+Tests:
+- ./gradlew testDebugUnitTest -> PASS
+- ./gradlew assembleDebug -> PASS
+Notes:
+- Implemented immutable KwpFrame, KwpFrameCodec (encodeRequest, parseResponse, stripLeadingEcho, extractFrame), and refactored Kwp2000Protocol to accumulate frames and handle NRC 0x78 properly.
+
 
 ## Rules
 

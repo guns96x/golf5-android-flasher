@@ -174,7 +174,7 @@ git commit -m "test: add pure KWP transport boundary"
 **Interfaces:**
 - Produces: `KwpFrame`, `KwpFrameCodec.encodeRequest()`, `KwpFrameCodec.parseResponse()`, typed protocol exceptions.
 
-- [ ] **Step 1: Write parser tests before implementation**
+- [x] **Step 1: Write parser tests before implementation**
 
 Cover exactly these cases:
 
@@ -189,7 +189,7 @@ Cover exactly these cases:
 
 For the short-frame test, build a response with target `0xF1`, source `0x01`, SID `0x5A`, payload `0x9B 0x31 0x32`, then append additive 8-bit checksum. Assert service ID and payload, not merely that parsing returned non-null.
 
-- [ ] **Step 2: Implement immutable frame types**
+- [x] **Step 2: Implement immutable frame types**
 
 Use:
 
@@ -208,7 +208,7 @@ class KwpNegativeResponseException(val failedSid: Int, val nrc: Int) : IOExcepti
 )
 ```
 
-- [ ] **Step 3: Implement `KwpFrameCodec` as pure Kotlin**
+- [x] **Step 3: Implement `KwpFrameCodec` as pure Kotlin**
 
 Required behavior:
 
@@ -219,7 +219,7 @@ Required behavior:
 - parser validates exact total length and checksum;
 - parser does not search arbitrary raw bytes for SID.
 
-- [ ] **Step 4: Write request-engine tests with a scripted transport**
+- [x] **Step 4: Write request-engine tests with a scripted transport**
 
 Create a test fake where each `write()` can enqueue exact read chunks. Add:
 
@@ -232,7 +232,7 @@ Create a test fake where each `write()` can enqueue exact read chunks. Add:
 
 The NRC pending sequence must be `0x7F <requested SID> 0x78` inside a valid KWP frame. The protocol must not retransmit the original request after NRC `0x78`.
 
-- [ ] **Step 5: Refactor `Kwp2000Protocol`**
+- [x] **Step 5: Refactor `Kwp2000Protocol`**
 
 Constructor becomes:
 
@@ -247,11 +247,11 @@ class Kwp2000Protocol(
 
 `readFrame` must accumulate bytes because one transport read is not guaranteed to equal one KWP frame. Keep an internal receive buffer and parse only when a complete frame is available.
 
-- [ ] **Step 6: Update call sites until compilation is green**
+- [x] **Step 6: Update call sites until compilation is green**
 
 `MainActivity` should still construct `Kwp2000Protocol(usbSerialManager)`, because Task 1 made `UsbSerialManager` a `KwpTransport`.
 
-- [ ] **Step 7: Run**
+- [x] **Step 7: Run**
 
 ```bash
 ./gradlew testDebugUnitTest
@@ -260,7 +260,7 @@ class Kwp2000Protocol(
 
 Expected: both PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add app/src/main/java/com/golf5/edc16flasher/protocol app/src/test/java/com/golf5/edc16flasher/protocol
