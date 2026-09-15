@@ -34,6 +34,18 @@ class MppsHardwareTransport(
     private var readBitmask: Int = 0
     private val rxQueue = ConcurrentLinkedQueue<Byte>()
 
+    /** True only after a session was authenticated using a known captured vector. */
+    @Volatile
+    private var _mppsAuthVerified: Boolean = false
+
+    /**
+     * Indicates whether the current session's MPPS authentication was validated
+     * by a known captured challenge/response vector.
+     * Task 7 (FlashEligibility) consumes this fact to gate physical write capability.
+     */
+    val mppsAuthVerified: Boolean get() = _mppsAuthVerified
+
+
     override val isConnected: Boolean
         get() = connection != null
 
@@ -134,6 +146,7 @@ class MppsHardwareTransport(
             endpointIn = null
             endpointOut = null
             rxQueue.clear()
+            _mppsAuthVerified = false
         }
     }
 
@@ -525,32 +538,16 @@ class MppsHardwareTransport(
     }
 
     private fun computeChallengeResponse(challenge: ByteArray, secNum: ByteArray): ByteArray {
-        if (challenge.size < 4) return byteArrayOf(0, 0, 0, 0)
-
-        val hexC = challenge.take(4).map { String.format("%02X", it) }.joinToString("")
-        if (hexC.equals("1EB987D7", ignoreCase = true)) {
-            return byteArrayOf(0x65.toByte(), 0xE3.toByte(), 0xDB.toByte(), 0xEE.toByte())
+        return when (val result = MppsAuthenticator.responseFor(challenge, secNum)) {
+            is MppsAuthenticator.MppsAuthResult.KnownResponse -> {
+                _mppsAuthVerified = true
+                result.bytes
+            }
+            is MppsAuthenticator.MppsAuthResult.UnknownChallenge -> {
+                _mppsAuthVerified = false
+                throw MppsAuthenticationUnverifiedException(result.challengeHex)
+            }
         }
-        if (hexC.equals("DB0B83ED", ignoreCase = true)) {
-            return byteArrayOf(0x51.toByte(), 0xD6.toByte(), 0xEC.toByte(), 0x90.toByte())
-        }
-
-        val c0 = challenge[0].toLong() and 0xFF
-        val c1 = challenge[1].toLong() and 0xFF
-        val c2 = challenge[2].toLong() and 0xFF
-        val c3 = challenge[3].toLong() and 0xFF
-        val cVal = c0 or (c1 shl 8) or (c2 shl 16) or (c3 shl 24)
-
-        val a = 0x78D3035CL
-        val b = 0x3F30029DL
-        val rVal = ((cVal * a) + b) and 0xFFFFFFFFL
-
-        return byteArrayOf(
-            (rVal and 0xFF).toByte(),
-            ((rVal shr 8) and 0xFF).toByte(),
-            ((rVal shr 16) and 0xFF).toByte(),
-            ((rVal shr 24) and 0xFF).toByte()
-        )
     }
 
     private fun isAck(b: Byte): Boolean {
