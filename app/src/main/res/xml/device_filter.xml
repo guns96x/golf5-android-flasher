@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- FTDI FT232R / FT232RL (Standard VAG KKL / MPPS / OBD cables) -->
-    <usb-device vendor-id="1027" product-id="24577" />
-    <usb-device vendor-id="1027" product-id="24592" />
-    <usb-device vendor-id="1027" product-id="24593" />
-    <!-- CH340 / CH341 -->
-    <usb-device vendor-id="6790" product-id="29987" />
-    <!-- Silicon Labs CP2102 -->
-    <usb-device vendor-id="4292" product-id="60000" />
-    <!-- Prolific PL2303 -->
-    <usb-device vendor-id="1659" product-id="8963" />
+    <!-- FTDI (All PIDs: FT232R, FT232RL, FT2232, etc. VID 0x0403 = 1027) -->
+    <usb-device vendor-id="1027" />
+    <!-- WCH CH340 / CH341 / CH343 (All PIDs: VID 0x1A86 = 6790) -->
+    <usb-device vendor-id="6790" />
+    <!-- Silicon Labs CP210x (All PIDs: VID 0x10C4 = 4292) -->
+    <usb-device vendor-id="4292" />
+    <!-- Prolific PL2303 (All PIDs: VID 0x067B = 1659) -->
+    <usb-device vendor-id="1659" />
+    <!-- MPPS Amt-Cartech hardware (VID 0x1C43 = 7235) -->
+    <usb-device vendor-id="7235" />
+    <!-- Cypress FX2 used in MPPS clones (VID 0x04B4 = 1204) -->
+    <usb-device vendor-id="1204" />
 </resources>

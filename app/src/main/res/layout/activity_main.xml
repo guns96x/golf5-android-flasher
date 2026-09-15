@@ -56,13 +56,32 @@
             android:textSize="12sp"
             android:layout_marginBottom="4dp" />
 
-        <TextView
-            android:id="@+id/tvUsbStatus"
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="● USB Кабель не підключено"
-            android:textColor="#FF5252"
-            android:textSize="12sp" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:id="@+id/tvUsbStatus"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="● USB Кабель не підключено"
+                android:textColor="#FF5252"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/btnToggleEmulator"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:text="Тест Емуляція"
+                android:textSize="10sp"
+                android:backgroundTint="#37474F"
+                android:textColor="#80D8FF"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="0dp" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- ECU ID & Active File Info -->

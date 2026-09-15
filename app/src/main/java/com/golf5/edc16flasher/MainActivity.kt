@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
+import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Build
@@ -19,6 +20,9 @@ import com.golf5.edc16flasher.protocol.EcuFlasher
 import com.golf5.edc16flasher.protocol.Kwp2000Protocol
 import com.golf5.edc16flasher.usb.UsbSerialManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -36,6 +40,7 @@ class MainActivity : AppCompatActivity() {
 
     private var customBinBytes: ByteArray? = null
     private var selectedFileName: String = "03G906021QJ_stage1_refined_CS_OK.bin (Вбудована)"
+    private var voltageJob: Job? = null
 
     private val openDocumentLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -45,28 +50,51 @@ class MainActivity : AppCompatActivity() {
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            when (intent.action) {
-                UsbSerialManager.ACTION_USB_PERMISSION -> {
-                    val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                    if (granted) {
-                        appendLog("[USB] Дозвіл USB надано користувачем.")
-                        connectUsb()
-                    } else {
-                        appendLog("[USB] Помилка: Доступ до USB відхилено.")
+            try {
+                when (intent.action) {
+                    UsbSerialManager.ACTION_USB_PERMISSION -> {
+                        val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                        if (granted) {
+                            appendLog("[USB] Дозвіл USB надано користувачем.")
+                            connectUsb()
+                        } else {
+                            appendLog("[USB] Доступ до USB відхилено.")
+                        }
+                    }
+                    UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                        appendLog("[USB] Виявлено підключення діагностичного адаптера.")
+                        checkUsbDevices()
+                    }
+                    UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                        appendLog("[USB] Адаптер відключено.")
+                        voltageJob?.cancel()
+                        usbSerialManager.close()
+                        updateUiDisconnected()
+                    }
+                    "com.golf5.edc16flasher.DIAGNOSTIC" -> {
+                        appendLog("[DIAG] Запуск повної апаратної діагностики MPPS...")
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            val report = usbSerialManager.runDiagnostic()
+                            withContext(Dispatchers.Main) {
+                                appendLog(report)
+                            }
+                        }
                     }
                 }
-                UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    appendLog("[USB] Виявлено підключення діагностичного адаптера.")
-                    checkUsbDevices()
-                }
-                UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    appendLog("[USB] Адаптер відключено.")
-                    usbSerialManager.close()
-                    updateUiDisconnected()
-                }
+            } catch (t: Throwable) {
+                appendLog("[USB] Помилка обробки події USB: ${t.message}")
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        appendLog("[USB] Оновлено сесію USB (onNewIntent).")
+        checkUsbDevices()
+    }
+
+    private var isConnecting = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -81,10 +109,11 @@ class MainActivity : AppCompatActivity() {
             addAction(UsbSerialManager.ACTION_USB_PERMISSION)
             addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            addAction("com.golf5.edc16flasher.DIAGNOSTIC")
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
         } else {
             registerReceiver(usbReceiver, filter)
         }
@@ -93,13 +122,45 @@ class MainActivity : AppCompatActivity() {
         checkUsbDevices()
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (!usbSerialManager.isConnected && !isConnecting) {
+            checkUsbDevices()
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        voltageJob?.cancel()
         unregisterReceiver(usbReceiver)
         usbSerialManager.close()
     }
 
     private fun setupButtons() {
+        binding.tvUsbStatus.setOnClickListener {
+            appendLog("[USB] Ручний повторний пошук адаптера...")
+            checkUsbDevices()
+        }
+        binding.btnToggleEmulator.setOnClickListener {
+            if (!usbSerialManager.isConnected) {
+                appendLog("[EMULATOR] Активація локального емулятора Bosch EDC16U34...")
+                if (usbSerialManager.openMockEmulator()) {
+                    val v = usbSerialManager.getBatteryVoltage()
+                    appendLog("[EMULATOR] Емулятор активовано (🔋 13.8V, SW 391847)! Готово до вичитки та тестів.")
+                    updateUiConnected(v)
+                    startVoltageMonitoring()
+                    binding.btnToggleEmulator.text = "Вимкнути Тест"
+                    binding.btnToggleEmulator.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#B71C1C"))
+                }
+            } else if (usbSerialManager.transportName.contains("Емуляція")) {
+                appendLog("[EMULATOR] Вимкнення емулятора...")
+                voltageJob?.cancel()
+                usbSerialManager.close()
+                updateUiDisconnected()
+            } else {
+                appendLog("[USB] Фізичний адаптер підключено! Відключіть кабель для тестування в емуляторі.")
+            }
+        }
         binding.btnEcuId.setOnClickListener { readEcuId() }
         binding.btnRead.setOnClickListener { confirmAndRead() }
         binding.btnWrite.setOnClickListener { confirmAndFlash() }
@@ -111,60 +172,155 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkUsbDevices() {
-        val drivers = usbSerialManager.findSupportedDevices()
-        if (drivers.isNotEmpty()) {
-            val driver = drivers[0]
-            val dev = driver.device
-            binding.tvUsbStatus.text = "● Адаптер підключено: ${dev.productName ?: "MPPS / FTDI K-Line"}"
-            binding.tvUsbStatus.setTextColor(Color.parseColor("#00E676"))
-            appendLog("[USB] Знайдено адаптер: ${dev.productName ?: "USB Serial"} (VID: 0x${Integer.toHexString(dev.vendorId).uppercase()})")
-            usbSerialManager.requestPermission(driver) {
-                appendLog("[USB] Запит системного дозволу USB...")
+        try {
+            val supported = usbSerialManager.findSupportedDevices()
+            val rawDevices = usbSerialManager.getRawDevices()
+
+            if (supported.isNotEmpty()) {
+                val dev = supported[0]
+                val vidHex = Integer.toHexString(dev.vendorId).uppercase()
+                val pidHex = Integer.toHexString(dev.productId).uppercase()
+                val isMpps = usbSerialManager.isMppsDevice(dev)
+                val name = if (isMpps) "MPPS v18 (AMT Flash)" else (try { dev.productName ?: "K-Line" } catch (e: Throwable) { "K-Line" })
+
+                if (usbSerialManager.hasPermission(dev)) {
+                    appendLog("[USB] Знайдено $name (VID:0x$vidHex PID:0x$pidHex), дозвіл є.")
+                    connectUsb(dev)
+                } else {
+                    binding.tvUsbStatus.text = "● Запит дозволу USB ($name)"
+                    binding.tvUsbStatus.setTextColor(Color.parseColor("#FFA726"))
+                    appendLog("[USB] Знайдено $name (VID:0x$vidHex PID:0x$pidHex). Запит системного дозволу...")
+                    usbSerialManager.requestPermission(dev) {
+                        appendLog("[USB] Очікування підтвердження на екрані...")
+                    }
+                }
+            } else if (rawDevices.isNotEmpty()) {
+                val dev = rawDevices.first()
+                val vidHex = Integer.toHexString(dev.vendorId).uppercase()
+                val pidHex = Integer.toHexString(dev.productId).uppercase()
+                binding.tvUsbStatus.text = "● USB підключено (0x$vidHex:0x$pidHex)"
+                binding.tvUsbStatus.setTextColor(Color.parseColor("#FFA726"))
+                appendLog("[USB] Виявлено непідтримуваний USB пристрій: VID:0x$vidHex PID:0x$pidHex")
+            } else {
+                updateUiDisconnected()
             }
-        } else {
-            updateUiDisconnected()
+        } catch (t: Throwable) {
+            appendLog("[USB] Помилка сканування USB: ${t.message}")
         }
     }
 
     private fun updateUiDisconnected() {
+        voltageJob?.cancel()
         binding.tvUsbStatus.text = "● USB кабель не підключено"
         binding.tvUsbStatus.setTextColor(Color.parseColor("#FF5252"))
+        binding.btnToggleEmulator.text = "Тест Емуляція"
+        binding.btnToggleEmulator.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#37474F"))
     }
 
-    private fun connectUsb() {
-        val drivers = usbSerialManager.findSupportedDevices()
-        if (drivers.isNotEmpty()) {
-            if (usbSerialManager.open(drivers[0], 10400)) {
-                appendLog("[USB] Порт K-Line успішно відкрито (10400 бод).")
-            } else {
-                appendLog("[USB] Не вдалося відкрити порт.")
+    private fun connectUsb(device: UsbDevice? = null) {
+        if (usbSerialManager.isConnected || isConnecting) return
+        isConnecting = true
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val target = device ?: usbSerialManager.findSupportedDevices().firstOrNull() ?: return@launch
+                withContext(Dispatchers.Main) {
+                    appendLog("[USB] Ініціалізація ${target.deviceName}...")
+                }
+                if (usbSerialManager.open(target, 10400)) {
+                    val v = usbSerialManager.getBatteryVoltage()
+                    val vStr = if (v != null) String.format(Locale.US, " (🔋 %.1fV)", v) else ""
+                    withContext(Dispatchers.Main) {
+                        appendLog("[USB] ${usbSerialManager.transportName} успішно підключено$vStr! Готово.")
+                        updateUiConnected(v)
+                    }
+                    startVoltageMonitoring()
+                } else {
+                    withContext(Dispatchers.Main) {
+                        appendLog("[USB] Не вдалося ініціалізувати протокол адаптера.")
+                    }
+                }
+            } catch (t: Throwable) {
+                withContext(Dispatchers.Main) {
+                    appendLog("[USB] Помилка відкриття порту: ${t.message}")
+                }
+            } finally {
+                isConnecting = false
             }
         }
     }
 
-    private fun readEcuId() {
-        if (!usbSerialManager.isConnected) {
-            appendLog("[MPPS] Помилка: USB адаптер не підключено!")
-            return
+    @Volatile
+    private var isTransactionActive = false
+
+    private fun startVoltageMonitoring() {
+        voltageJob?.cancel()
+        voltageJob = lifecycleScope.launch {
+            while (isActive && usbSerialManager.isConnected) {
+                delay(2000)
+                if (!isTransactionActive) {
+                    val v = withContext(Dispatchers.IO) {
+                        try { usbSerialManager.getBatteryVoltage() } catch (e: Throwable) { null }
+                    }
+                    if (v != null && v > 1.0f) {
+                        runOnUiThread { updateUiConnected(v) }
+                    }
+                }
+            }
         }
+    }
+
+    private fun updateUiConnected(voltage: Float?) {
+        if (!usbSerialManager.isConnected) return
+        val vStr = if (voltage != null) String.format(Locale.US, " | 🔋 %.1fV", voltage) else ""
+        binding.tvUsbStatus.text = "● ${usbSerialManager.transportName}$vStr"
+        val color = if (voltage == null || voltage >= 12.0f) "#00E676" else "#FFA726"
+        binding.tvUsbStatus.setTextColor(Color.parseColor(color))
+    }
+
+    private fun ensureUsbConnected(): Boolean {
+        if (!usbSerialManager.isConnected) {
+            checkUsbDevices()
+        }
+        if (!usbSerialManager.isConnected) {
+            val raw = usbSerialManager.getRawDevices()
+            if (raw.isEmpty()) {
+                appendLog("[MPPS] Помилка: Телефон не бачить жодного USB пристрою.")
+                appendLog("-> ПЕРЕВІРТЕ: чи підключено кабель до OBD2 роз'єму авто та увімкнено запалювання? (Кабелі KKL/MPPS живляться від 12В машини!)")
+                appendLog("-> ПЕРЕВІРТЕ: чи підтримує ваш OTG перехідник передачу даних.")
+            } else {
+                appendLog("[MPPS] USB виявлено, але адаптер не підключено або очікує дозволу.")
+            }
+            return false
+        }
+        return true
+    }
+
+    private fun readEcuId() {
+        if (!ensureUsbConnected()) return
 
         lifecycleScope.launch {
-            appendLog("[MPPS] Зчитування ідентифікатора ЕБУ...")
+            isTransactionActive = true
+            appendLog("[MPPS] Зчитування ідентифікатора ЕБУ (EDC16)...")
             try {
-                val ecuInfo = withContext(Dispatchers.IO) { protocol.readEcuIdentification() }
+                val ecuInfo = withContext(Dispatchers.IO) {
+                    if (usbSerialManager.isMpps) {
+                        usbSerialManager.queryEcuIdentificationMpps()
+                    } else {
+                        protocol.readEcuIdentification()
+                    }
+                }
                 binding.tvEcuId.text = "ECU ID: $ecuInfo"
-                appendLog("[MPPS] Успішно:\n$ecuInfo")
+                appendLog("[MPPS] Успішно ідентифіковано: $ecuInfo")
             } catch (e: Exception) {
-                appendLog("[MPPS] Помилка: ${e.message}")
+                appendLog("[MPPS] Помилка зчитування ідентифікатора: ${e.message}")
+            } finally {
+                isTransactionActive = false
             }
         }
     }
 
     private fun confirmAndRead() {
-        if (!usbSerialManager.isConnected) {
-            appendLog("[MPPS] Помилка: USB адаптер не підключено!")
-            return
-        }
+        if (!ensureUsbConnected()) return
 
         AlertDialog.Builder(this)
             .setTitle("Зчитування калібрувань (Read ECU)")
@@ -176,40 +332,46 @@ class MainActivity : AppCompatActivity() {
 
     private fun startReading() {
         setControlsEnabled(false)
+        isTransactionActive = true
         lifecycleScope.launch {
-            val fullImage = flasher.readCalibration { progress, msg ->
-                runOnUiThread {
-                    binding.progressBar.progress = progress
-                    binding.tvProgress.text = "$progress% - $msg"
-                    appendLog(msg)
+            try {
+                val fullImage = flasher.readCalibration { progress, msg ->
+                    runOnUiThread {
+                        binding.progressBar.progress = progress
+                        binding.tvProgress.text = "$progress% - $msg"
+                        appendLog(msg)
+                    }
                 }
-            }
-            setControlsEnabled(true)
 
-            if (fullImage != null) {
-                val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-                val backupFile = File(getExternalFilesDir(null), "03G906021QJ_backup_$timeStamp.bin")
-                FileOutputStream(backupFile).use { it.write(fullImage) }
-                appendLog("[MPPS] Бекап успішно збережено: ${backupFile.absolutePath}")
+                if (fullImage != null) {
+                    val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                    val backupFile = File(getExternalFilesDir(null), "03G906021QJ_backup_$timeStamp.bin")
+                    FileOutputStream(backupFile).use { it.write(fullImage) }
+                    appendLog("[MPPS] Бекап успішно збережено: ${backupFile.absolutePath}")
 
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Зчитування завершено!")
-                    .setMessage("Резервну копію збережено:
-${backupFile.name}
-Розмір: 2 097 152 байти.")
-                    .setPositiveButton("OK", null)
-                    .show()
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Зчитування завершено!")
+                        .setMessage("Резервну копію збережено: " + backupFile.name + " (2 097 152 байти)")
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
+            } finally {
+                isTransactionActive = false
+                setControlsEnabled(true)
             }
         }
     }
 
     private fun confirmAndFlash() {
-        if (!usbSerialManager.isConnected) {
-            appendLog("[MPPS] Помилка: USB адаптер не підключено!")
-            return
-        }
+        if (!ensureUsbConnected()) return
 
-        val msg = "УВАГА (Запис MPPS):\n\n" +
+        val v = usbSerialManager.getBatteryVoltage()
+        val voltWarning = if (v != null && v < 12.0f) {
+            "\n⚠️ УВАГА: Напруга АКБ (${String.format(Locale.US, "%.1fV", v)}) нижче 12.0V! Підключіть зарядний пристрій!\n"
+        } else ""
+
+        val msg = "УВАГА (Запис MPPS):\n" +
+            voltWarning +
             "1. Акумулятор заряджений (12.4В+).\n" +
             "2. Увімкніть 'Режим польоту' на телефоні.\n" +
             "3. Вимкніть споживачі в авто.\n" +
@@ -225,10 +387,7 @@ ${backupFile.name}
     }
 
     private fun confirmAndRecovery() {
-        if (!usbSerialManager.isConnected) {
-            appendLog("[RECOVERY] Помилка: USB адаптер не підключено!")
-            return
-        }
+        if (!ensureUsbConnected()) return
 
         val msg = "УВАГА: РЕЖИМ АВАРІЙНОГО ВІДНОВЛЕННЯ\n\n" +
             "Використовуйте тільки якщо запис було перервано і блок не реагує на стандартний запит.\n" +
@@ -245,37 +404,41 @@ ${backupFile.name}
 
     private fun startFlashing(isRecovery: Boolean) {
         setControlsEnabled(false)
+        isTransactionActive = true
         lifecycleScope.launch {
-            val binBytes = customBinBytes ?: withContext(Dispatchers.IO) {
-                assets.open("03G906021QJ_stage1_refined_CS_OK.bin").readBytes()
-            }
+            try {
+                val binBytes = customBinBytes ?: withContext(Dispatchers.IO) {
+                    assets.open("03G906021QJ_stage1_refined_CS_OK.bin").readBytes()
+                }
 
-            val success = if (isRecovery) {
-                flasher.recoveryFlash(binBytes) { progress, msg ->
-                    runOnUiThread {
-                        binding.progressBar.progress = progress
-                        binding.tvProgress.text = "$progress% - $msg"
-                        appendLog(msg)
+                val success = if (isRecovery) {
+                    flasher.recoveryFlash(binBytes) { progress, msg ->
+                        runOnUiThread {
+                            binding.progressBar.progress = progress
+                            binding.tvProgress.text = "$progress% - $msg"
+                            appendLog(msg)
+                        }
+                    }
+                } else {
+                    flasher.flashFirmware(binBytes) { progress, msg ->
+                        runOnUiThread {
+                            binding.progressBar.progress = progress
+                            binding.tvProgress.text = "$progress% - $msg"
+                            appendLog(msg)
+                        }
                     }
                 }
-            } else {
-                flasher.flashFirmware(binBytes) { progress, msg ->
-                    runOnUiThread {
-                        binding.progressBar.progress = progress
-                        binding.tvProgress.text = "$progress% - $msg"
-                        appendLog(msg)
-                    }
-                }
-            }
-            setControlsEnabled(true)
 
-            if (success) {
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Успіх!")
-                    .setMessage("Прошивку успішно записано (КС валідна)!
-Вимкніть запалювання на 10с, потім запустіть двигун.")
-                    .setPositiveButton("OK", null)
-                    .show()
+                if (success) {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Успіх!")
+                        .setMessage("Прошивку успішно записано (КС валідна)!\nВимкніть запалювання на 10с, потім запустіть двигун.")
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
+            } finally {
+                isTransactionActive = false
+                setControlsEnabled(true)
             }
         }
     }
@@ -287,12 +450,17 @@ ${backupFile.name}
         }
 
         lifecycleScope.launch {
-            appendLog("[DTC] Очищення кодів помилок (Clear DTC Service 0x14)...")
-            val ok = withContext(Dispatchers.IO) { protocol.clearDiagnosticTroubleCodes() }
-            if (ok) {
-                appendLog("[DTC] Всі коди помилок успішно очищені!")
-            } else {
-                appendLog("[DTC] Помилка або немає відповіді від ЕБУ.")
+            isTransactionActive = true
+            try {
+                appendLog("[DTC] Очищення кодів помилок (Clear DTC Service 0x14)...")
+                val ok = withContext(Dispatchers.IO) { protocol.clearDiagnosticTroubleCodes() }
+                if (ok) {
+                    appendLog("[DTC] Всі коди помилок успішно очищені!")
+                } else {
+                    appendLog("[DTC] Помилка або немає відповіді від ЕБУ.")
+                }
+            } finally {
+                isTransactionActive = false
             }
         }
     }

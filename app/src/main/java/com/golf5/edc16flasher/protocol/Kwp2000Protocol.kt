@@ -87,26 +87,78 @@ class Kwp2000Protocol(private val usb: UsbSerialManager) {
 
     private fun readFrame(txEchoToDiscard: ByteArray): ByteArray {
         val buffer = ByteArray(512)
-        val readCount = usb.read(buffer, 2500)
+        val readCount = try {
+            usb.read(buffer, 2500)
+        } catch (e: Exception) {
+            0
+        }
         if (readCount <= 0) return ByteArray(0)
 
         var raw = buffer.copyOfRange(0, readCount)
+        val hexStr = raw.joinToString(" ") { String.format("%02X", it) }
+        android.util.Log.d("EDC16_KWP", "RX ($readCount bytes): $hexStr")
 
         // Filter out K-Line local echo if present
-        if (raw.size >= txEchoToDiscard.size) {
-            var match = true
-            for (i in txEchoToDiscard.indices) {
-                if (raw[i] != txEchoToDiscard[i]) {
-                    match = false
-                    break
-                }
-            }
-            if (match) {
-                raw = raw.copyOfRange(txEchoToDiscard.size, raw.size)
-            }
+        val echoIdx = indexOfSubarray(raw, txEchoToDiscard)
+        if (echoIdx != -1) {
+            val afterEcho = ByteArray(raw.size - txEchoToDiscard.size)
+            System.arraycopy(raw, 0, afterEcho, 0, echoIdx)
+            System.arraycopy(raw, echoIdx + txEchoToDiscard.size, afterEcho, echoIdx, raw.size - (echoIdx + txEchoToDiscard.size))
+            raw = afterEcho
         }
 
         return raw
+    }
+
+    private fun indexOfSubarray(outer: ByteArray, target: ByteArray): Int {
+        if (target.isEmpty() || outer.size < target.size) return -1
+        for (i in 0..outer.size - target.size) {
+            var found = true
+            for (j in target.indices) {
+                if (outer[i + j] != target[j]) {
+                    found = false
+                    break
+                }
+            }
+            if (found) return i
+        }
+        return -1
+    }
+
+    fun initKwpSession(): Boolean {
+        android.util.Log.i(TAG, "Attempting KWP2000 Fast Init: Physical Engine 0x01 (81 01 F1 81 F4)...")
+        val reqPhysical = byteArrayOf(0x81.toByte(), 0x01.toByte(), 0xF1.toByte(), 0x81.toByte(), 0xF4.toByte())
+        usb.sendFastInit(25, reqPhysical)
+
+        val buf = ByteArray(256)
+        var count = try { usb.read(buf, 2000) } catch (e: Exception) { 0 }
+        if (count > 0) {
+            val hex = buf.copyOfRange(0, count).joinToString(" ") { String.format("%02X", it) }
+            android.util.Log.i(TAG, "Fast Init (Physical 0x01) Response ($count bytes): $hex")
+            if (buf.copyOfRange(0, count).any { (it.toInt() and 0xFF) == 0xC1 }) {
+                android.util.Log.i(TAG, "Fast Init SUCCESS on Physical 0x01 (SID 0xC1 acknowledged)!")
+                return true
+            }
+        }
+
+        // Secondary attempt: Functional OBD (Target 0x33)
+        android.util.Log.i(TAG, "Attempting KWP2000 Fast Init: Functional 0x33 (C1 33 F1 81 66)...")
+        try { Thread.sleep(500) } catch (ignored: InterruptedException) {}
+        val reqFunctional = byteArrayOf(0xC1.toByte(), 0x33.toByte(), 0xF1.toByte(), 0x81.toByte(), 0x66.toByte())
+        usb.sendFastInit(25, reqFunctional)
+
+        count = try { usb.read(buf, 2000) } catch (e: Exception) { 0 }
+        if (count > 0) {
+            val hex = buf.copyOfRange(0, count).joinToString(" ") { String.format("%02X", it) }
+            android.util.Log.i(TAG, "Fast Init (Functional 0x33) Response ($count bytes): $hex")
+            if (buf.copyOfRange(0, count).any { (it.toInt() and 0xFF) == 0xC1 }) {
+                android.util.Log.i(TAG, "Fast Init SUCCESS on Functional 0x33 (SID 0xC1 acknowledged)!")
+                return true
+            }
+        }
+
+        android.util.Log.w(TAG, "No positive 0xC1 response to Fast Init on K-Line (ECU may require CAN/TP2.0)")
+        return false
     }
 
     fun startDiagnosticSession(sessionType: Byte = 0x85.toByte()): Boolean {
@@ -115,19 +167,35 @@ class Kwp2000Protocol(private val usb: UsbSerialManager) {
     }
 
     fun forceRecoverySession(): Boolean {
-        // Send wake-up byte stream on K-Line to recover interrupted ECU session
-        try {
-            usb.write(byteArrayOf(0xFF.toByte(), 0x00, 0x55), 500)
-            Thread.sleep(100)
-        } catch (ignored: Exception) {}
+        // Send hardware fast-init pulse on K-Line to recover interrupted ECU session
+        initKwpSession()
+        try { Thread.sleep(100) } catch (ignored: Exception) {}
         return startDiagnosticSession(0x85.toByte())
     }
 
     fun readEcuIdentification(): String {
+        // Step 1: Complete ISO 14230 Fast Init with embedded StartCommunication
+        initKwpSession()
+        try { Thread.sleep(50) } catch (ignored: Exception) {}
+
+        // Step 2: Establish diagnostic session (default 0x81 first, then 0x85)
+        try {
+            startDiagnosticSession(0x81.toByte())
+        } catch (e: Exception) {
+            try {
+                startDiagnosticSession(0x85.toByte())
+            } catch (ignored: Exception) {}
+        }
+
+        // Step 3: Query identification
         val resp = try {
             sendRequest(0x1A.toByte(), byteArrayOf(0x9B.toByte()))
-        } catch (e: Exception) {
-            sendRequest(0x21.toByte(), byteArrayOf(0x80.toByte()))
+        } catch (e1: Exception) {
+            try {
+                sendRequest(0x1A.toByte(), byteArrayOf(0x90.toByte()))
+            } catch (e2: Exception) {
+                sendRequest(0x21.toByte(), byteArrayOf(0x80.toByte()))
+            }
         }
         return String(resp.filter { it in 32..126 }.toByteArray())
     }
@@ -180,9 +248,7 @@ class Kwp2000Protocol(private val usb: UsbSerialManager) {
             throw IOException("RequestUpload 0x35 rejected: no positive 0x75 response from ECU")
         }
         
-        // Parse negotiated maxNumberOfBlockLength from 0x75 response
-        // ISO 14230-3: 0x75 [length parameter: 1 or 2 bytes]
-        val payloadBytes = resp.copyOfRange(idx + 1, resp.size - 1) // exclude 0x75 and CS
+        val payloadBytes = resp.copyOfRange(idx + 1, resp.size - 1)
         var blockSize = 128
         if (payloadBytes.size >= 2) {
             val msb = payloadBytes[0].toInt() and 0xFF
@@ -210,11 +276,10 @@ class Kwp2000Protocol(private val usb: UsbSerialManager) {
     fun readMemoryChunk(blockSeq: Byte, expectedSize: Int = 128): ByteArray {
         val payload = byteArrayOf(blockSeq)
         val resp = sendRequest(0x36.toByte(), payload)
-        val idx = resp.indexOf(0x76.toByte()) // 0x36 + 0x40 = 0x76
+        val idx = resp.indexOf(0x76.toByte())
         if (idx == -1 || idx + 2 >= resp.size) {
             throw IOException(String.format("Failed to read block 0x%02X: Invalid or missing 0x76 response", blockSeq))
         }
-        // Exclude 0x76, blockSeq byte, and trailing 1-byte ISO 14230 checksum
         val chunk = resp.copyOfRange(idx + 2, resp.size - 1)
         if (chunk.isEmpty()) {
             throw IOException(String.format("Failed to read block 0x%02X: Empty data returned by ECU", blockSeq))
@@ -229,7 +294,6 @@ class Kwp2000Protocol(private val usb: UsbSerialManager) {
 
     fun clearDiagnosticTroubleCodes(): Boolean {
         return try {
-            // Service 0x14 0xFF 0x00 (Clear all DTC groups)
             val resp = sendRequest(0x14.toByte(), byteArrayOf(0xFF.toByte(), 0x00.toByte()))
             resp.isNotEmpty()
         } catch (e: Exception) {
@@ -244,5 +308,9 @@ class Kwp2000Protocol(private val usb: UsbSerialManager) {
         } catch (e: Exception) {
             true
         }
+    }
+
+    companion object {
+        private const val TAG = "EDC16_KWP"
     }
 }
