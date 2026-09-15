@@ -28,6 +28,14 @@ Tests:
 Notes:
 - Extracted EcuFirmwareProfile and Edc16ChecksumEngine with fix/verify methods. Tested non-mutation of input, declared block residue calculations, and bounds validation. Replaced embedded fixEdc16Checksum in EcuFlasher.
 
+## Task 4: Make security access explicit and fail closed
+Commit: 80030f3dfab06e5b87807e59a973f5cc681cbc6c
+Tests:
+- ./gradlew testDebugUnitTest -> PASS
+- ./gradlew assembleDebug -> PASS
+Notes:
+- Extracted SecurityAccessAlgorithm interface. Wrapped legacy BLS formula as LegacyBlsSecurityAlgorithm with verified = false. Created MockSecurityAlgorithm with verified = true for emulator testing. Injected SecurityAccessAlgorithm into EcuFlasher.
+
 
 ## Rules
 

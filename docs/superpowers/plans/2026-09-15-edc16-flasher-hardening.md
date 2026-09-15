@@ -360,7 +360,7 @@ git commit -m "refactor: isolate EDC16 firmware profile and checksum engine"
 **Interfaces:**
 - Produces: `SecurityAccessAlgorithm` with verification state.
 
-- [ ] **Step 1: Create the interface exactly**
+- [x] **Step 1: Create the interface exactly**
 
 ```kotlin
 interface SecurityAccessAlgorithm {
@@ -370,13 +370,13 @@ interface SecurityAccessAlgorithm {
 }
 ```
 
-- [ ] **Step 2: Move the current formula without claiming validation**
+- [x] **Step 2: Move the current formula without claiming validation**
 
 `LegacyBlsSecurityAlgorithm.id = "legacy-bls-formula-v1"` and `verified = false`.
 
 Preserve its current deterministic transform exactly so behavior does not silently change.
 
-- [ ] **Step 3: Add a mock-only verified algorithm**
+- [x] **Step 3: Add a mock-only verified algorithm**
 
 Use a deliberately simple deterministic emulator transform:
 
@@ -391,13 +391,13 @@ object MockSecurityAlgorithm : SecurityAccessAlgorithm {
 }
 ```
 
-- [ ] **Step 4: Add tests**
+- [x] **Step 4: Add tests**
 
 Assert the mock vector `12 34 56 78 -> B7 91 F3 DD` and assert `LegacyBlsSecurityAlgorithm.verified == false`.
 
 Do not add fake real-ECU vectors just to turn the flag true.
 
-- [ ] **Step 5: Make `EcuFlasher` receive a security algorithm**
+- [x] **Step 5: Make `EcuFlasher` receive a security algorithm**
 
 Constructor target:
 
@@ -412,7 +412,7 @@ class EcuFlasher(
 
 Physical eligibility is implemented in Task 7; until then do not add any new path that silently ignores `security.verified`.
 
-- [ ] **Step 6: Run and commit**
+- [x] **Step 6: Run and commit**
 
 ```bash
 ./gradlew testDebugUnitTest
