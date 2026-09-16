@@ -35,6 +35,13 @@ class UsbSerialManager(private val context: Context) : KwpTransport {
     override val isMpps: Boolean
         get() = activeTransport?.isMpps == true
 
+    /**
+     * Indicates whether the current MPPS session was authenticated using a known
+     * captured challenge/response vector. Returns false for non-MPPS transports.
+     */
+    val mppsAuthVerified: Boolean
+        get() = (activeTransport as? MppsHardwareTransport)?.mppsAuthVerified ?: false
+
     override val transportName: String
         get() = activeTransport?.transportName ?: "Не підключено"
 

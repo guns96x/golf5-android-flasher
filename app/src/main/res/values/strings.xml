@@ -5,4 +5,21 @@
     <string name="btn_read_id">1. Зчитати ID ЕБУ</string>
     <string name="btn_flash">2. Записати прошивку (Refined Stage 1)</string>
     <string name="firmware_ready">Файл готовий: 03G906021QJ_stage1_refined_dpf_egr_off.bin</string>
+
+    <!-- Capability mode banner — exactly these 4 strings (Task 8) -->
+    <string name="mode_emulator">EMULATOR</string>
+    <string name="mode_physical_read_only">PHYSICAL / READ ONLY</string>
+    <string name="mode_physical_write_eligible">PHYSICAL / WRITE ELIGIBLE</string>
+    <string name="mode_flashing">FLASHING - DO NOT DISCONNECT</string>
+
+    <!-- Refusal reason labels shown in the eligibility dialog -->
+    <string name="refusal_not_connected">Транспорт не підключено</string>
+    <string name="refusal_ecu_id_mismatch">ID ЕБУ не збігається з профілем EDC16U34_03G906021QJ_391847</string>
+    <string name="refusal_voltage_unavailable">Напруга бортмережі недоступна</string>
+    <string name="refusal_voltage_too_low">Напруга бортмережі нижче 12.2V</string>
+    <string name="refusal_image_size">Розмір файлу прошивки не дорівнює 2 097 152 байт</string>
+    <string name="refusal_checksum">Контрольна сума EDC16 невалідна</string>
+    <string name="refusal_security_unverified">Алгоритм Security Access не верифіковано</string>
+    <string name="refusal_mpps_auth_unverified">MPPS автентифікація не верифікована (невідомий challenge)</string>
+    <string name="refusal_backup_required">Резервна копія ЕБУ не збережена в цій сесії</string>
 </resources>

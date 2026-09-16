@@ -75,13 +75,35 @@ class EcuFlasher(
             onProgress(92, "[MPPS] Завершення передачі даних (TransferExit)...")
             protocol.requestTransferExit()
 
-            onProgress(95, "[MPPS] Очищення кодів несправностей (Clear DTC)...")
+            // ── READ-BACK VERIFICATION (CRITICAL SAFETY) ──
+            onProgress(93, "[MPPS] Верифікація запису — зчитування калібрувань...")
+            val writtenCalibration = firmwareBytes.copyOfRange(calStart, calStart + calSize)
+            val readBackCalibration = readCalibrationForVerification(calStart, calSize, onProgress)
+
+            onProgress(94, "[MPPS] Порівняння SHA-256...")
+            val writtenSha = sha256Hex(writtenCalibration)
+            val readBackSha = sha256Hex(readBackCalibration)
+
+            if (writtenSha != readBackSha) {
+                onProgress(0, "[MPPS] ПОМИЛКА ВЕРИФІКАЦІЇ! SHA-256 не співпадають!")
+                onProgress(0, "Записано: $writtenSha")
+                onProgress(0, "Прочитано: $readBackSha")
+                onProgress(0, "ЕБУ може бути пошкоджений! НЕ вимикайте запалювання!")
+                return@withContext false
+            }
+
+            onProgress(95, "[MPPS] ✓ Верифікація пройшла успішно! SHA-256: $writtenSha")
+
+            onProgress(96, "[MPPS] Очищення кодів несправностей (Clear DTC)...")
             protocol.clearDiagnosticTroubleCodes()
 
             onProgress(98, "[MPPS] Перезавантаження ЕБУ (ECU Reset)...")
-            protocol.ecuReset()
+            val resetOk = protocol.ecuReset()
+            if (!resetOk) {
+                onProgress(99, "[MPPS] УВАГА: Reset не спрацював — вимкніть/увімкніть запалювання вручну!")
+            }
 
-            onProgress(100, "[MPPS] Прошивку успішно записано! Зачекайте 10с перед запуском.")
+            onProgress(100, "[MPPS] Прошивку успішно записано і верифіковано! Зачекайте 10с перед запуском.")
             return@withContext true
         } catch (e: Exception) {
             onProgress(0, "[MPPS] Помилка під час запису: ${e.message}")
@@ -205,5 +227,40 @@ class EcuFlasher(
             onProgress(0, "[MPPS] Помилка зчитування: ${e.message}")
             return@withContext null
         }
+    }
+
+    /**
+     * Read calibration region for verification after write.
+     * Used by flashFirmware() for read-back verification (C1 fix).
+     */
+    private suspend fun readCalibrationForVerification(
+        startAddress: Int,
+        size: Int,
+        onProgress: (Int, String) -> Unit
+    ): ByteArray = withContext(Dispatchers.IO) {
+        val blockSize = protocol.requestUpload(startAddress, size)
+        val result = ByteArray(size)
+        var offset = 0
+        var seq = 1
+
+        while (offset < size) {
+            val chunk = protocol.readMemoryChunk(seq.toByte(), blockSize)
+            val len = minOf(chunk.size, size - offset)
+            System.arraycopy(chunk, 0, result, offset, len)
+            offset += len
+            seq = (seq % 255) + 1
+        }
+
+        protocol.requestTransferExit()
+        return@withContext result
+    }
+
+    /**
+     * Calculate SHA-256 hex string for verification.
+     */
+    private fun sha256Hex(data: ByteArray): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        val hash = digest.digest(data)
+        return hash.joinToString("") { "%02x".format(it) }
     }
 }

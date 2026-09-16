@@ -277,12 +277,20 @@ class Kwp2000Protocol(
         }
     }
 
+    /**
+     * ECU Reset (SID 0x11, ResetType 0x01)
+     * Returns true only if ECU acknowledged the reset with positive response 0x51.
+     *
+     * CRITICAL FIX (C4): Do NOT return true on exception — that would hide reset failures
+     * and leave ECU in diagnostic session, potentially causing no-start condition.
+     */
     fun ecuReset(): Boolean {
         return try {
-            val frame = sendRequest(0x11.toByte(), byteArrayOf(0x01.toByte()))
+            val frame = sendRequest(0x11.toByte(), byteArrayOf(0x01.toByte()), timeoutMs = 2000L)
             frame.serviceId == 0x51
         } catch (e: Exception) {
-            true
+            log("ECU Reset failed: ${e.message}")
+            false  // ← Return false, NOT true!
         }
     }
 

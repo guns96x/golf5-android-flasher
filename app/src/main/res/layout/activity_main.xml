@@ -39,6 +39,20 @@
             android:paddingVertical="4dp" />
     </LinearLayout>
 
+    <!-- Capability mode banner (Task 8): EMULATOR | PHYSICAL/READ ONLY | PHYSICAL/WRITE ELIGIBLE | FLASHING -->
+    <TextView
+        android:id="@+id/tvModeBanner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/mode_emulator"
+        android:textColor="#FFFFFF"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:padding="6dp"
+        android:layout_marginBottom="8dp"
+        android:background="#37474F" />
+
     <!-- Vehicle Selector Card -->
     <LinearLayout
         android:layout_width="match_parent"
