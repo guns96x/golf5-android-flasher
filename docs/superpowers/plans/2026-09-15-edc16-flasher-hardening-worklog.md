@@ -65,6 +65,25 @@ Notes:
 - Created FlashTransaction.kt: FlashProtocol interface (no Android deps), backup-first orchestration, SHA-256 read-back verification before ECU reset, typed FlashResult (Success/Refused/Failed with stage).
 - Fixed test compile error: FakeProtocol and transferData must be open to allow anonymous subclassing in backupIsCalledBeforeFirstTransfer test.
 
+## Interim commit: critical safety improvements (C1, C2, C4)
+Commit: 3283ea264f825f536ed5661102bff1f79aa9839c
+Notes:
+- Not a plan task. Partially started Task 8 (banner strings, updateModeBanner) but left the gate bypassable via setControlsEnabled(true).
+
+## Task 8: Wire capability state into Android UI
+Commit: 6127a229b3dfcbe16fe2d924e3ff7b777cb1cb07
+Tests:
+- ./gradlew testDebugUnitTest --rerun-tasks -> PASS (58 tests, 0 failures)
+- ./gradlew assembleDebug -> PASS
+Notes:
+- Write/Recovery enabled only from evaluateEligibility(); refusal reasons shown under banner and in a dialog.
+- Found and fixed: emulator writes failed (app always sent legacy BLS key, mock expects mock key -> NRC 0x35); security now selected per transport.
+- Found and fixed: EcuFlasher ECU ID check accepted either identifier; now requires both. recoveryFlash had no read-back verification; added.
+- Checksum gate now uses Edc16ChecksumEngine instead of image size.
+- Step 5 manual on-device emulator smoke test NOT run (no device in session). Substituted EcuFlasherEmulatorTest (JVM, real Kwp2000Protocol + MockEdc16Transport: ID, backup, write, recovery, read-back). On-device check still outstanding.
+- Codex second-opinion review not run: usage limit until 2026-09-19.
+- Remaining gap: MainActivity still writes via EcuFlasher, not FlashTransaction. FlashTransaction reads backup before session/security access, which a real ECU would reject; fix that ordering before migrating.
+
 
 ## Rules
 
