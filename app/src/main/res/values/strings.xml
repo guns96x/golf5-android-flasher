@@ -6,7 +6,8 @@
     <string name="btn_flash">2. Записати прошивку (Refined Stage 1)</string>
     <string name="firmware_ready">Файл готовий: 03G906021QJ_stage1_refined_dpf_egr_off.bin</string>
 
-    <!-- Capability mode banner — exactly these 4 strings (Task 8) -->
+    <!-- Capability mode banner — these 4 strings (Task 8), plus a disconnected state -->
+    <string name="mode_disconnected">NOT CONNECTED</string>
     <string name="mode_emulator">EMULATOR</string>
     <string name="mode_physical_read_only">PHYSICAL / READ ONLY</string>
     <string name="mode_physical_write_eligible">PHYSICAL / WRITE ELIGIBLE</string>

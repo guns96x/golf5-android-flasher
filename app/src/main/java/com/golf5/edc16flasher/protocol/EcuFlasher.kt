@@ -38,7 +38,7 @@ class EcuFlasher(
             val ecuId = protocol.readEcuIdentification()
             onProgress(8, "Ідентифіковано: $ecuId")
 
-            if (!ecuId.contains("03G906021QJ") && !ecuId.contains("391847")) {
+            if (!profile.requiredIdentifiers.all { ecuId.contains(it) }) {
                 onProgress(0, "УВАГА: Захисне блокування! Номер ЕБУ не співпадає з 03G906021QJ (SW 391847)")
                 return@withContext false
             }
@@ -159,6 +159,18 @@ class EcuFlasher(
             onProgress(92, "[RECOVERY] Завершення сесії передачі...")
             protocol.requestTransferExit()
 
+            onProgress(93, "[RECOVERY] Верифікація запису — зчитування калібрувань...")
+            val writtenSha = sha256Hex(firmwareBytes.copyOfRange(calStart, calStart + calSize))
+            val readBackSha = sha256Hex(readCalibrationForVerification(calStart, calSize, onProgress))
+            if (writtenSha != readBackSha) {
+                onProgress(0, "[RECOVERY] ПОМИЛКА ВЕРИФІКАЦІЇ! SHA-256 не співпадають!")
+                onProgress(0, "Записано: $writtenSha")
+                onProgress(0, "Прочитано: $readBackSha")
+                onProgress(0, "ЕБУ НЕ перезавантажено. НЕ вимикайте запалювання!")
+                return@withContext false
+            }
+            onProgress(94, "[RECOVERY] ✓ Верифікація пройшла успішно! SHA-256: $writtenSha")
+
             onProgress(95, "[RECOVERY] Очищення помилок DTC...")
             protocol.clearDiagnosticTroubleCodes()
 
@@ -185,7 +197,7 @@ class EcuFlasher(
 
             onProgress(10, "[MPPS] Авторизація доступу Security Access...")
             val seed = protocol.requestSecuritySeed()
-            val key = Edc16Security.calculateKey(seed)
+            val key = security.calculateKey(seed)
             protocol.sendSecurityKey(key)
 
             onProgress(15, "[MPPS] Запит вивантаження (RequestUpload 0x180000..0x200000)...")

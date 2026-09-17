@@ -50,8 +50,18 @@
         android:textStyle="bold"
         android:gravity="center"
         android:padding="6dp"
-        android:layout_marginBottom="8dp"
         android:background="#37474F" />
+
+    <!-- Exact refusal reasons for write/recovery; tap the banner for a dialog -->
+    <TextView
+        android:id="@+id/tvEligibility"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#FFB74D"
+        android:textSize="11sp"
+        android:padding="4dp"
+        android:layout_marginBottom="8dp"
+        android:background="#1A1F26" />
 
     <!-- Vehicle Selector Card -->
     <LinearLayout

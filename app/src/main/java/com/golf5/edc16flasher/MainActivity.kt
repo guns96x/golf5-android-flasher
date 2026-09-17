@@ -17,12 +17,17 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.golf5.edc16flasher.databinding.ActivityMainBinding
+import com.golf5.edc16flasher.firmware.EcuFirmwareProfile
+import com.golf5.edc16flasher.firmware.Edc16ChecksumEngine
 import com.golf5.edc16flasher.flashing.FlashEligibility
 import com.golf5.edc16flasher.flashing.FlashPreflight
 import com.golf5.edc16flasher.flashing.FlashRefusalReason
 import com.golf5.edc16flasher.flashing.evaluateEligibility
 import com.golf5.edc16flasher.protocol.EcuFlasher
 import com.golf5.edc16flasher.protocol.Kwp2000Protocol
+import com.golf5.edc16flasher.security.LegacyBlsSecurityAlgorithm
+import com.golf5.edc16flasher.security.MockSecurityAlgorithm
+import com.golf5.edc16flasher.security.SecurityAccessAlgorithm
 import com.golf5.edc16flasher.usb.UsbSerialManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -41,17 +46,34 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var usbSerialManager: UsbSerialManager
     private lateinit var protocol: Kwp2000Protocol
-    private lateinit var flasher: EcuFlasher
 
-    private var customBinBytes: ByteArray? = null
+    private val profile = EcuFirmwareProfile.EDC16U34_03G906021QJ_391847
+
+    /** Checksum-verified (or auto-corrected) image ready to flash; null until a valid file is prepared. */
+    private var firmwareImage: ByteArray? = null
     private var selectedFileName: String = "03G906021QJ_stage1_refined_CS_OK.bin (Вбудована)"
+    private var checksumStatus: String = "не перевірено"
     private var voltageJob: Job? = null
 
-    /** Updated after a successful readEcuId() call — consumed by updateModeBanner(). */
+    /** Last voltage reading; null means unavailable. Consumed by eligibility evaluation. */
+    private var lastVoltage: Float? = null
+
+    /** Updated after a successful readEcuId() call — consumed by refreshUi(). */
     private var currentEcuId: String = ""
 
     /** Set to true after a successful startReading() backup in the current session. */
     private var sessionBackupCompleted: Boolean = false
+
+    /**
+     * True while any bus transaction runs. Blocks voltage polling, adapter reconnects
+     * and every control except passive log scrolling.
+     */
+    @Volatile
+    private var isTransactionActive = false
+
+    /** The emulator only accepts its mock key; physical ECUs get the (unverified) legacy formula. */
+    private val securityAlgorithm: SecurityAccessAlgorithm
+        get() = if (usbSerialManager.isPhysical) LegacyBlsSecurityAlgorithm else MockSecurityAlgorithm
 
     private val openDocumentLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -77,12 +99,20 @@ class MainActivity : AppCompatActivity() {
                         checkUsbDevices()
                     }
                     UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                        appendLog("[USB] Адаптер відключено.")
+                        if (isTransactionActive) {
+                            appendLog("[USB] !!! АДАПТЕР ВІДКЛЮЧЕНО ПІД ЧАС ОПЕРАЦІЇ! Не вимикайте запалювання, перевірте журнал.")
+                        } else {
+                            appendLog("[USB] Адаптер відключено.")
+                        }
                         voltageJob?.cancel()
                         usbSerialManager.close()
                         updateUiDisconnected()
                     }
                     "com.golf5.edc16flasher.DIAGNOSTIC" -> {
+                        if (isTransactionActive) {
+                            appendLog("[DIAG] Відхилено: триває операція з ЕБУ.")
+                            return
+                        }
                         appendLog("[DIAG] Запуск повної апаратної діагностики MPPS...")
                         lifecycleScope.launch(Dispatchers.IO) {
                             val report = usbSerialManager.runDiagnostic()
@@ -114,7 +144,6 @@ class MainActivity : AppCompatActivity() {
 
         usbSerialManager = UsbSerialManager(this)
         protocol = Kwp2000Protocol(usbSerialManager)
-        flasher = EcuFlasher(protocol)
 
         val filter = IntentFilter().apply {
             addAction(UsbSerialManager.ACTION_USB_PERMISSION)
@@ -130,6 +159,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         setupButtons()
+        refreshUi()
+        loadBuiltInFirmware()
         checkUsbDevices()
     }
 
@@ -152,6 +183,8 @@ class MainActivity : AppCompatActivity() {
             appendLog("[USB] Ручний повторний пошук адаптера...")
             checkUsbDevices()
         }
+        binding.tvModeBanner.setOnClickListener { showEligibilityDetails() }
+        binding.tvEligibility.setOnClickListener { showEligibilityDetails() }
         binding.btnToggleEmulator.setOnClickListener {
             if (!usbSerialManager.isConnected) {
                 appendLog("[EMULATOR] Активація локального емулятора Bosch EDC16U34...")
@@ -174,8 +207,8 @@ class MainActivity : AppCompatActivity() {
         }
         binding.btnEcuId.setOnClickListener { readEcuId() }
         binding.btnRead.setOnClickListener { confirmAndRead() }
-        binding.btnWrite.setOnClickListener { confirmAndFlash() }
-        binding.btnRecovery.setOnClickListener { confirmAndRecovery() }
+        binding.btnWrite.setOnClickListener { confirmAndFlash(isRecovery = false) }
+        binding.btnRecovery.setOnClickListener { confirmAndFlash(isRecovery = true) }
         binding.btnClearDtc.setOnClickListener { clearDtc() }
         binding.btnSelectFile.setOnClickListener {
             openDocumentLauncher.launch(arrayOf("application/octet-stream", "*/*"))
@@ -183,6 +216,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkUsbDevices() {
+        if (isTransactionActive) {
+            appendLog("[USB] Пошук адаптера відкладено: триває операція з ЕБУ.")
+            return
+        }
         try {
             val supported = usbSerialManager.findSupportedDevices()
             val rawDevices = usbSerialManager.getRawDevices()
@@ -212,7 +249,7 @@ class MainActivity : AppCompatActivity() {
                 binding.tvUsbStatus.text = "● USB підключено (0x$vidHex:0x$pidHex)"
                 binding.tvUsbStatus.setTextColor(Color.parseColor("#FFA726"))
                 appendLog("[USB] Виявлено непідтримуваний USB пристрій: VID:0x$vidHex PID:0x$pidHex")
-            } else {
+            } else if (!usbSerialManager.isConnected) {
                 updateUiDisconnected()
             }
         } catch (t: Throwable) {
@@ -224,84 +261,128 @@ class MainActivity : AppCompatActivity() {
         voltageJob?.cancel()
         sessionBackupCompleted = false
         currentEcuId = ""
+        lastVoltage = null
+        binding.tvEcuId.text = "ECU ID: —"
         binding.tvUsbStatus.text = "● USB кабель не підключено"
         binding.tvUsbStatus.setTextColor(Color.parseColor("#FF5252"))
         binding.btnToggleEmulator.text = "Тест Емуляція"
         binding.btnToggleEmulator.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#37474F"))
-        updateModeBanner(null)
+        refreshUi()
     }
 
+    // ── Capability state ────────────────────────────────────────────────────
+
+    private fun buildPreflight(voltage: Float?, recoveryMode: Boolean) = FlashPreflight(
+        connected = usbSerialManager.isConnected,
+        physical = usbSerialManager.isPhysical,
+        mpps = usbSerialManager.isMpps,
+        mppsAuthVerified = usbSerialManager.mppsAuthVerified,
+        ecuIdentification = currentEcuId,
+        voltage = voltage,
+        imageSize = firmwareImage?.size ?: 0,
+        checksumValid = firmwareImage != null,
+        securityVerified = securityAlgorithm.verified,
+        backupCompleted = sessionBackupCompleted,
+        recoveryMode = recoveryMode,
+    )
+
     /**
-     * Updates the mode banner and write/recovery button enabled state based on
-     * the current transport and preflight eligibility evaluation.
+     * Single source of truth for the mode banner and every control's enabled state.
+     * Write/Recovery are enabled only by calculated eligibility, never by USB state alone.
      */
-    private fun updateModeBanner(voltage: Float?) {
-        if (!usbSerialManager.isConnected) {
-            binding.tvModeBanner.text = getString(R.string.mode_emulator)
-            binding.tvModeBanner.setBackgroundColor(Color.parseColor("#37474F"))
-            binding.btnWrite.isEnabled = false
-            binding.btnRecovery.isEnabled = false
+    private fun refreshUi() {
+        if (isTransactionActive) {
+            setAllControlsEnabled(false)
             return
         }
 
-        val physical = usbSerialManager.isPhysical
-        val mpps = usbSerialManager.isMpps
+        val normal = evaluateEligibility(buildPreflight(lastVoltage, recoveryMode = false))
+        val recovery = evaluateEligibility(buildPreflight(lastVoltage, recoveryMode = true))
+        val writeEligible = normal is FlashEligibility.Eligible
+        val recoveryEligible = recovery is FlashEligibility.Eligible
 
-        if (!physical) {
-            // Emulator mode — always allow write via emulator
-            binding.tvModeBanner.text = getString(R.string.mode_emulator)
-            binding.tvModeBanner.setBackgroundColor(Color.parseColor("#37474F"))
-            binding.btnWrite.isEnabled = true
-            binding.btnRecovery.isEnabled = true
-            return
+        setAllControlsEnabled(true)
+        binding.btnWrite.isEnabled = writeEligible
+        binding.btnRecovery.isEnabled = recoveryEligible
+
+        val (bannerRes, bannerColor) = when {
+            !usbSerialManager.isConnected -> R.string.mode_disconnected to "#424242"
+            !usbSerialManager.isPhysical -> R.string.mode_emulator to "#37474F"
+            writeEligible || recoveryEligible -> R.string.mode_physical_write_eligible to "#1565C0"
+            else -> R.string.mode_physical_read_only to "#263238"
         }
+        binding.tvModeBanner.text = getString(bannerRes)
+        binding.tvModeBanner.setBackgroundColor(Color.parseColor(bannerColor))
+        binding.tvEligibility.text = "Запис: ${describe(normal)}\nRecovery: ${describe(recovery)}"
+    }
 
-        // Physical — evaluate eligibility
-        val imageBytes = customBinBytes
-        val imageSize = imageBytes?.size ?: 0
-        val preflight = FlashPreflight(
-            connected = true,
-            physical = true,
-            mpps = mpps,
-            mppsAuthVerified = usbSerialManager.mppsAuthVerified,
-            ecuIdentification = currentEcuId,
-            voltage = voltage,
-            imageSize = imageSize,
-            checksumValid = imageSize == 0x200000, // true only when file loaded and correct size
-            securityVerified = false,              // LegacyBlsSecurityAlgorithm.verified = false
-            backupCompleted = sessionBackupCompleted,
-            recoveryMode = false,
-        )
-        val normalEligibility = evaluateEligibility(preflight)
-        val recoveryEligibility = evaluateEligibility(preflight.copy(recoveryMode = true))
+    private fun describe(eligibility: FlashEligibility): String = when (eligibility) {
+        FlashEligibility.Eligible -> "дозволено"
+        is FlashEligibility.Refused -> "заблоковано — " + eligibility.reasons.joinToString("; ") { reasonLabel(it) }
+    }
 
-        val writeEligible = normalEligibility is FlashEligibility.Eligible
-        val recoveryEligible = recoveryEligibility is FlashEligibility.Eligible
+    private fun reasonLabel(reason: FlashRefusalReason): String = getString(
+        when (reason) {
+            FlashRefusalReason.NOT_CONNECTED -> R.string.refusal_not_connected
+            FlashRefusalReason.ECU_ID_MISMATCH -> R.string.refusal_ecu_id_mismatch
+            FlashRefusalReason.VOLTAGE_UNAVAILABLE -> R.string.refusal_voltage_unavailable
+            FlashRefusalReason.VOLTAGE_TOO_LOW -> R.string.refusal_voltage_too_low
+            FlashRefusalReason.IMAGE_SIZE_INVALID -> R.string.refusal_image_size
+            FlashRefusalReason.CHECKSUM_INVALID -> R.string.refusal_checksum
+            FlashRefusalReason.SECURITY_ALGORITHM_UNVERIFIED -> R.string.refusal_security_unverified
+            FlashRefusalReason.MPPS_AUTH_UNVERIFIED -> R.string.refusal_mpps_auth_unverified
+            FlashRefusalReason.BACKUP_REQUIRED -> R.string.refusal_backup_required
+        }
+    )
 
-        when {
-            isTransactionActive -> {
-                binding.tvModeBanner.text = getString(R.string.mode_flashing)
-                binding.tvModeBanner.setBackgroundColor(Color.parseColor("#B71C1C"))
-                binding.btnWrite.isEnabled = false
-                binding.btnRecovery.isEnabled = false
-            }
-            writeEligible -> {
-                binding.tvModeBanner.text = getString(R.string.mode_physical_write_eligible)
-                binding.tvModeBanner.setBackgroundColor(Color.parseColor("#1565C0"))
-                binding.btnWrite.isEnabled = true
-                binding.btnRecovery.isEnabled = recoveryEligible
-            }
-            else -> {
-                binding.tvModeBanner.text = getString(R.string.mode_physical_read_only)
-                binding.tvModeBanner.setBackgroundColor(Color.parseColor("#263238"))
-                binding.btnWrite.isEnabled = false
-                binding.btnRecovery.isEnabled = false
+    private fun showEligibilityDetails() {
+        val msg = listOf(false, true).joinToString("\n\n") { recovery ->
+            val title = if (recovery) "RECOVERY" else "NORMAL"
+            when (val e = evaluateEligibility(buildPreflight(lastVoltage, recovery))) {
+                FlashEligibility.Eligible -> "$title: дозволено"
+                is FlashEligibility.Refused -> "$title: заблоковано\n" + e.reasons.joinToString("\n") { "• " + reasonLabel(it) }
             }
         }
+        AlertDialog.Builder(this)
+            .setTitle(binding.tvModeBanner.text)
+            .setMessage(msg)
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    // ── Transaction lock ────────────────────────────────────────────────────
+
+    private fun beginTransaction(flashing: Boolean) {
+        isTransactionActive = true
+        voltageJob?.cancel()
+        setAllControlsEnabled(false)
+        if (flashing) {
+            binding.tvModeBanner.text = getString(R.string.mode_flashing)
+            binding.tvModeBanner.setBackgroundColor(Color.parseColor("#B71C1C"))
+        }
+    }
+
+    private fun endTransaction() {
+        isTransactionActive = false
+        if (usbSerialManager.isConnected) startVoltageMonitoring()
+        refreshUi()
+    }
+
+    private fun setAllControlsEnabled(enabled: Boolean) {
+        binding.btnEcuId.isEnabled = enabled
+        binding.btnRead.isEnabled = enabled
+        binding.btnWrite.isEnabled = enabled
+        binding.btnRecovery.isEnabled = enabled
+        binding.btnClearDtc.isEnabled = enabled
+        binding.btnSelectFile.isEnabled = enabled
+        binding.btnToggleEmulator.isEnabled = enabled
+        binding.tvUsbStatus.isEnabled = enabled
+        binding.tvModeBanner.isEnabled = enabled
+        binding.tvEligibility.isEnabled = enabled
     }
 
     private fun connectUsb(device: UsbDevice? = null) {
-        if (usbSerialManager.isConnected || isConnecting) return
+        if (usbSerialManager.isConnected || isConnecting || isTransactionActive) return
         isConnecting = true
         lifecycleScope.launch(Dispatchers.IO) {
             try {
@@ -332,9 +413,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    @Volatile
-    private var isTransactionActive = false
-
     private fun startVoltageMonitoring() {
         voltageJob?.cancel()
         voltageJob = lifecycleScope.launch {
@@ -344,9 +422,7 @@ class MainActivity : AppCompatActivity() {
                     val v = withContext(Dispatchers.IO) {
                         try { usbSerialManager.getBatteryVoltage() } catch (e: Throwable) { null }
                     }
-                    if (v != null && v > 1.0f) {
-                        runOnUiThread { updateUiConnected(v) }
-                    }
+                    if (!isTransactionActive) updateUiConnected(v?.takeIf { it > 1.0f })
                 }
             }
         }
@@ -354,14 +430,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateUiConnected(voltage: Float?) {
         if (!usbSerialManager.isConnected) return
-        val vStr = if (voltage != null) String.format(Locale.US, " | 🔋 %.1fV", voltage) else ""
+        lastVoltage = voltage
+        val vStr = if (voltage != null) String.format(Locale.US, " | 🔋 %.1fV", voltage) else " | 🔋 —"
         binding.tvUsbStatus.text = "● ${usbSerialManager.transportName}$vStr"
-        val color = if (voltage == null || voltage >= 12.0f) "#00E676" else "#FFA726"
+        val color = if (voltage != null && voltage >= 12.2f) "#00E676" else "#FFA726"
         binding.tvUsbStatus.setTextColor(Color.parseColor(color))
-        updateModeBanner(voltage)
+        refreshUi()
     }
 
     private fun ensureUsbConnected(): Boolean {
+        if (isTransactionActive) return false
         if (!usbSerialManager.isConnected) {
             checkUsbDevices()
         }
@@ -382,8 +460,8 @@ class MainActivity : AppCompatActivity() {
     private fun readEcuId() {
         if (!ensureUsbConnected()) return
 
+        beginTransaction(flashing = false)
         lifecycleScope.launch {
-            isTransactionActive = true
             appendLog("[MPPS] Зчитування ідентифікатора ЕБУ (EDC16)...")
             try {
                 val ecuInfo = withContext(Dispatchers.IO) {
@@ -396,11 +474,10 @@ class MainActivity : AppCompatActivity() {
                 binding.tvEcuId.text = "ECU ID: $ecuInfo"
                 currentEcuId = ecuInfo
                 appendLog("[MPPS] Успішно ідентифіковано: $ecuInfo")
-                updateModeBanner(usbSerialManager.getBatteryVoltage())
             } catch (e: Exception) {
                 appendLog("[MPPS] Помилка зчитування ідентифікатора: ${e.message}")
             } finally {
-                isTransactionActive = false
+                endTransaction()
             }
         }
     }
@@ -417,8 +494,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startReading() {
-        setControlsEnabled(false)
-        isTransactionActive = true
+        if (!ensureUsbConnected()) return
+        beginTransaction(flashing = false)
+        val flasher = EcuFlasher(protocol, profile, security = securityAlgorithm)
         lifecycleScope.launch {
             try {
                 val fullImage = flasher.readCalibration { progress, msg ->
@@ -432,10 +510,9 @@ class MainActivity : AppCompatActivity() {
                 if (fullImage != null) {
                     val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
                     val backupFile = File(getExternalFilesDir(null), "03G906021QJ_backup_$timeStamp.bin")
-                    FileOutputStream(backupFile).use { it.write(fullImage) }
+                    withContext(Dispatchers.IO) { FileOutputStream(backupFile).use { it.write(fullImage) } }
                     sessionBackupCompleted = true
                     appendLog("[MPPS] Бекап успішно збережено: ${backupFile.absolutePath}")
-                    updateModeBanner(usbSerialManager.getBatteryVoltage())
 
                     AlertDialog.Builder(this@MainActivity)
                         .setTitle("Зчитування завершено!")
@@ -443,59 +520,64 @@ class MainActivity : AppCompatActivity() {
                         .setPositiveButton("OK", null)
                         .show()
                 }
+            } catch (e: Exception) {
+                appendLog("[MPPS] Помилка збереження бекапу: ${e.message}")
             } finally {
-                isTransactionActive = false
-                setControlsEnabled(true)
+                endTransaction()
             }
         }
     }
 
-    private fun confirmAndFlash() {
+    /**
+     * Re-evaluates eligibility with a fresh voltage reading, then shows every fact the
+     * write depends on. Refuses with the exact reasons instead of offering a confirm button.
+     */
+    private fun confirmAndFlash(isRecovery: Boolean) {
         if (!ensureUsbConnected()) return
 
-        val v = usbSerialManager.getBatteryVoltage()
-        val voltWarning = if (v != null && v < 12.0f) {
-            "\n⚠️ УВАГА: Напруга АКБ (${String.format(Locale.US, "%.1fV", v)}) нижче 12.0V! Підключіть зарядний пристрій!\n"
-        } else ""
+        lifecycleScope.launch {
+            val v = withContext(Dispatchers.IO) {
+                try { usbSerialManager.getBatteryVoltage() } catch (e: Throwable) { null }
+            }
+            if (isTransactionActive) return@launch
+            updateUiConnected(v?.takeIf { it > 1.0f })
 
-        val msg = "УВАГА (Запис MPPS):\n" +
-            voltWarning +
-            "1. Акумулятор заряджений (12.4В+).\n" +
-            "2. Увімкніть 'Режим польоту' на телефоні.\n" +
-            "3. Вимкніть споживачі в авто.\n" +
-            "4. Контрольна сума буде автоматично перерахована.\n\n" +
-            "Записати $selectedFileName?"
+            val eligibility = evaluateEligibility(buildPreflight(lastVoltage, isRecovery))
+            if (eligibility is FlashEligibility.Refused) {
+                appendLog("[MPPS] Запис відхилено: " + eligibility.reasons.joinToString { it.name })
+                showEligibilityDetails()
+                return@launch
+            }
 
-        AlertDialog.Builder(this)
-            .setTitle("Запис прошивки (Write Flash)")
-            .setMessage(msg)
-            .setPositiveButton("Записати") { _, _ -> startFlashing(isRecovery = false) }
-            .setNegativeButton("Скасувати", null)
-            .show()
-    }
+            val vStr = lastVoltage?.let { String.format(Locale.US, "%.1f V", it) } ?: "недоступна"
+            val summary = "ECU ID: ${currentEcuId.ifBlank { "не зчитано" }}\n" +
+                "Адаптер: ${usbSerialManager.transportName}\n" +
+                "Напруга: $vStr\n" +
+                "Файл: $selectedFileName\n" +
+                "Контрольна сума: $checksumStatus\n" +
+                "Бекап: ${if (sessionBackupCompleted) "збережено в цій сесії" else "НЕМАЄ"}\n" +
+                "Режим: ${if (isRecovery) "RECOVERY" else "NORMAL"}\n\n"
 
-    private fun confirmAndRecovery() {
-        if (!ensureUsbConnected()) return
-
-        val msg = "⚠️ УВАГА: РЕЖИМ АВАРІЙНОГО ВІДНОВЛЕННЯ\n\n" +
-            "Використовуйте тільки якщо:\n" +
-            "• Запис було перервано\n" +
-            "• ЕБУ не реагує на стандартний запит\n\n" +
-            if (!sessionBackupCompleted) {
-                "🔴 У ВАС НЕМАЄ BACKUP!\n" +
-                "Recovery може зламати ЕБУ без можливості відновлення!\n\n"
+            val msg = if (isRecovery) {
+                summary +
+                    "⚠️ Використовуйте тільки якщо запис було перервано або ЕБУ не реагує на стандартний запит.\n" +
+                    "Recovery пропустить перевірку ID та примусово увійде в бутлоадер."
             } else {
-                ""
-            } +
-            "Recovery пропустить перевірку ID та примусово увійде в бутлоадер.\n\n" +
-            "Продовжити?"
+                summary +
+                    "1. Акумулятор заряджений (12.4В+), підключено зарядний пристрій.\n" +
+                    "2. Увімкніть 'Режим польоту' на телефоні.\n" +
+                    "3. Вимкніть споживачі в авто."
+            }
 
-        AlertDialog.Builder(this)
-            .setTitle("Аварійне відновлення (Recovery)")
-            .setMessage(msg)
-            .setPositiveButton("ДАЛІ") { _, _ -> confirmRecoveryFinal() }
-            .setNegativeButton("Скасувати", null)
-            .show()
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle(if (isRecovery) "Аварійне відновлення (Recovery)" else "Запис прошивки (Write Flash)")
+                .setMessage(msg)
+                .setPositiveButton(if (isRecovery) "ДАЛІ" else "Записати") { _, _ ->
+                    if (isRecovery) confirmRecoveryFinal() else startFlashing(isRecovery = false)
+                }
+                .setNegativeButton("Скасувати", null)
+                .show()
+        }
     }
 
     /**
@@ -532,45 +614,45 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startFlashing(isRecovery: Boolean) {
-        isTransactionActive = true  // Set FIRST (race condition fix M3)
-        setControlsEnabled(false)
+        if (isTransactionActive) return
+        // State may have changed while a dialog was open (disconnect, voltage drop): check again.
+        val eligibility = evaluateEligibility(buildPreflight(lastVoltage, isRecovery))
+        val image = firmwareImage
+        if (eligibility is FlashEligibility.Refused || image == null) {
+            appendLog("[MPPS] Запис скасовано: умови змінилися після підтвердження.")
+            refreshUi()
+            showEligibilityDetails()
+            return
+        }
+
+        beginTransaction(flashing = true)
+        val flasher = EcuFlasher(protocol, profile, security = securityAlgorithm)
 
         lifecycleScope.launch {
             try {
-                val binBytes = customBinBytes ?: withContext(Dispatchers.IO) {
-                    assets.open("03G906021QJ_stage1_refined_CS_OK.bin").readBytes()
+                val onProgress: (Int, String) -> Unit = { progress, msg ->
+                    runOnUiThread {
+                        binding.progressBar.progress = progress
+                        binding.tvProgress.text = "$progress% - $msg"
+                        appendLog(msg)
+                    }
                 }
-
-                // Use legacy EcuFlasher with read-back verification (C1 fix applied)
-                // TODO: Full FlashTransaction migration in next phase
                 val success = if (isRecovery) {
-                    flasher.recoveryFlash(binBytes) { progress, msg ->
-                        runOnUiThread {
-                            binding.progressBar.progress = progress
-                            binding.tvProgress.text = "$progress% - $msg"
-                            appendLog(msg)
-                        }
-                    }
+                    flasher.recoveryFlash(image, onProgress)
                 } else {
-                    flasher.flashFirmware(binBytes) { progress, msg ->
-                        runOnUiThread {
-                            binding.progressBar.progress = progress
-                            binding.tvProgress.text = "$progress% - $msg"
-                            appendLog(msg)
-                        }
-                    }
+                    flasher.flashFirmware(image, onProgress)
                 }
 
-                if (success) {
-                    AlertDialog.Builder(this@MainActivity)
-                        .setTitle("Успіх!")
-                        .setMessage("Прошивку успішно записано та верифіковано!\nВимкніть запалювання на 10с, потім запустіть двигун.")
-                        .setPositiveButton("OK", null)
-                        .show()
-                }
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle(if (success) "Успіх!" else "ЗАПИС НЕ ЗАВЕРШЕНО")
+                    .setMessage(
+                        if (success) "Прошивку успішно записано та верифіковано!\nВимкніть запалювання на 10с, потім запустіть двигун."
+                        else "Запис або верифікація не пройшли. НЕ вимикайте запалювання, збережіть журнал і перевірте причину."
+                    )
+                    .setPositiveButton("OK", null)
+                    .show()
             } finally {
-                isTransactionActive = false
-                setControlsEnabled(true)
+                endTransaction()
             }
         }
     }
@@ -580,9 +662,10 @@ class MainActivity : AppCompatActivity() {
             appendLog("[DTC] Помилка: USB адаптер не підключено!")
             return
         }
+        if (isTransactionActive) return
 
+        beginTransaction(flashing = false)
         lifecycleScope.launch {
-            isTransactionActive = true
             try {
                 appendLog("[DTC] Очищення кодів помилок (Clear DTC Service 0x14)...")
                 val ok = withContext(Dispatchers.IO) { protocol.clearDiagnosticTroubleCodes() }
@@ -591,39 +674,73 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     appendLog("[DTC] Помилка або немає відповіді від ЕБУ.")
                 }
+            } catch (e: Exception) {
+                appendLog("[DTC] Помилка: ${e.message}")
             } finally {
-                isTransactionActive = false
+                endTransaction()
+            }
+        }
+    }
+
+    // ── Firmware image ──────────────────────────────────────────────────────
+
+    /** Returns the image to flash (verified or auto-corrected) and a human-readable checksum status. */
+    private fun prepareFirmware(raw: ByteArray): Pair<ByteArray?, String> {
+        if (raw.size != profile.fullImageSize) {
+            return null to "НЕВАЛІДНА (розмір ${raw.size} байт)"
+        }
+        return try {
+            if (Edc16ChecksumEngine.verify(raw, profile).isValid) {
+                raw to "OK (0xD01FE500)"
+            } else {
+                Edc16ChecksumEngine.fix(raw, profile) to "ВИПРАВЛЕНО автоматично (0xD01FE500)"
+            }
+        } catch (e: Exception) {
+            null to "НЕВАЛІДНА (${e.message})"
+        }
+    }
+
+    private fun applyFirmware(name: String, raw: ByteArray) {
+        val (image, status) = prepareFirmware(raw)
+        firmwareImage = image
+        selectedFileName = name
+        checksumStatus = status
+        binding.tvFileStatus.text = "File: $name | CS: $status"
+        appendLog("[MPPS] Файл: $name — контрольна сума: $status")
+        refreshUi()
+    }
+
+    private fun loadBuiltInFirmware() {
+        lifecycleScope.launch {
+            try {
+                val raw = withContext(Dispatchers.IO) {
+                    assets.open("03G906021QJ_stage1_refined_CS_OK.bin").readBytes()
+                }
+                if (firmwareImage == null) applyFirmware(selectedFileName, raw)
+            } catch (e: Exception) {
+                appendLog("[MPPS] Вбудований файл недоступний: ${e.message}")
             }
         }
     }
 
     private fun loadBinaryFromUri(uri: Uri) {
+        if (isTransactionActive) return
         lifecycleScope.launch {
             try {
                 val bytes = withContext(Dispatchers.IO) {
                     contentResolver.openInputStream(uri)?.use { it.readBytes() }
                 }
-                if (bytes != null && bytes.size == 2097152) {
-                    customBinBytes = bytes
-                    selectedFileName = uri.lastPathSegment ?: "custom.bin"
-                    binding.tvFileStatus.text = "File: $selectedFileName (2 097 152b OK)"
-                    appendLog("[MPPS] Завантажено зовнішній бінарник: $selectedFileName")
+                if (bytes == null) {
+                    appendLog("[MPPS] Помилка: не вдалося прочитати файл.")
+                } else if (bytes.size != profile.fullImageSize) {
+                    appendLog("[MPPS] Помилка: файл повинен бути рівно 2 097 152 байти (отримано ${bytes.size})!")
                 } else {
-                    appendLog("[MPPS] Помилка: файл повинен бути рівно 2 097 152 байти!")
+                    applyFirmware(uri.lastPathSegment ?: "custom.bin", bytes)
                 }
             } catch (e: Exception) {
                 appendLog("[MPPS] Помилка відкриття файлу: ${e.message}")
             }
         }
-    }
-
-    private fun setControlsEnabled(enabled: Boolean) {
-        binding.btnEcuId.isEnabled = enabled
-        binding.btnRead.isEnabled = enabled
-        binding.btnWrite.isEnabled = enabled
-        binding.btnRecovery.isEnabled = enabled
-        binding.btnClearDtc.isEnabled = enabled
-        binding.btnSelectFile.isEnabled = enabled
     }
 
     private fun appendLog(msg: String) {

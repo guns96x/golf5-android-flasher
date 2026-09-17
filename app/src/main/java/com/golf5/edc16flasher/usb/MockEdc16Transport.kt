@@ -198,7 +198,7 @@ class MockEdc16Transport(private val context: Context? = null) : IUsbTransport {
             0x1A -> { // Read ECU Identification
                 val sub = if (payload.isNotEmpty()) payload[0].toInt() and 0xFF else 0x9B
                 val idStr = when (sub) {
-                    0x9B -> "03G906021QJ "
+                    0x9B -> "03G906021QJ  1037391847"
                     0x97 -> "391847"
                     0x90 -> "WVWZZZ1KZ7P123456"
                     else -> "EDC16U34"

@@ -1,12 +1,16 @@
 package com.golf5.edc16flasher.protocol
 
 import com.golf5.edc16flasher.flashing.FlashProtocol
+import com.golf5.edc16flasher.security.SecurityAccessAlgorithm
 
 /**
  * Adapter that bridges Kwp2000Protocol to FlashProtocol interface.
  * Used by MainActivity to migrate from EcuFlasher to FlashTransaction (C6 fix).
  */
-class FlashProtocolAdapter(private val kwp: Kwp2000Protocol) : FlashProtocol {
+class FlashProtocolAdapter(
+    private val kwp: Kwp2000Protocol,
+    private val security: SecurityAccessAlgorithm,
+) : FlashProtocol {
 
     override fun startDiagnosticSession(mode: Byte): Boolean {
         return try {
@@ -20,7 +24,7 @@ class FlashProtocolAdapter(private val kwp: Kwp2000Protocol) : FlashProtocol {
     override fun performSecurityAccess(): Boolean {
         return try {
             val seed = kwp.requestSecuritySeed()
-            val key = Edc16Security.calculateKey(seed)
+            val key = security.calculateKey(seed)
             kwp.sendSecurityKey(key)
             true
         } catch (e: Exception) {
