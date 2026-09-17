@@ -45,6 +45,10 @@ class UsbSerialManager(private val context: Context) : KwpTransport {
     override val transportName: String
         get() = activeTransport?.transportName ?: "Не підключено"
 
+    /** Human-readable reason the last [open] call failed, or null after a success. */
+    var lastConnectError: String? = null
+        private set
+
     fun getRawDevices(): Collection<UsbDevice> = usbManager.deviceList.values
 
     fun isMppsDevice(dev: UsbDevice): Boolean {
@@ -90,10 +94,20 @@ class UsbSerialManager(private val context: Context) : KwpTransport {
             val mppsTransport = MppsHardwareTransport(context, usbManager, device)
             if (mppsTransport.open(baudRate)) {
                 activeTransport = mppsTransport
+                lastConnectError = null
                 TermuxBridgeServer.start(mppsTransport)
                 return true
             }
-            Log.w(TAG, "Native MPPS open failed, attempting fallback...")
+            lastConnectError = mppsTransport.lastOpenError
+            if (mppsTransport.lastOpenWasAuthRejected) {
+                // This dongle encrypts/frames K-Line traffic itself; a generic UART driver
+                // cannot talk to the ECU through it regardless of the auth outcome, so a
+                // fallback attempt here would only produce a misleading connected state
+                // followed by a confusing protocol timeout.
+                Log.w(TAG, "Native MPPS authentication rejected — not attempting generic fallback on this dongle.")
+                return false
+            }
+            Log.w(TAG, "Native MPPS open failed (${lastConnectError}), attempting fallback...")
         }
 
         // Standard KKL Serial Fallback
@@ -107,27 +121,32 @@ class UsbSerialManager(private val context: Context) : KwpTransport {
         }
         val prober = UsbSerialProber(customTable)
         val driver = prober.probeDevice(device) ?: run {
-            Log.e(TAG, "No compatible USB serial driver found for device")
+            lastConnectError = "No compatible USB serial driver found for device"
+            Log.e(TAG, lastConnectError!!)
             return false
         }
 
         val conn = usbManager.openDevice(device) ?: run {
-            Log.e(TAG, "Could not open connection to UsbDevice")
+            lastConnectError = "Could not open connection to UsbDevice"
+            Log.e(TAG, lastConnectError!!)
             return false
         }
 
         val port = driver.ports.firstOrNull() ?: run {
             conn.close()
+            lastConnectError = "No serial port exposed by driver"
             return false
         }
 
         val serialTransport = SerialHardwareTransport(port, conn)
         if (serialTransport.open(baudRate)) {
             activeTransport = serialTransport
+            lastConnectError = null
             return true
         } else {
             serialTransport.close()
             try { conn.close() } catch (ignored: Exception) {}
+            lastConnectError = lastConnectError ?: "Generic K-Line serial transport failed to open"
         }
 
         return false

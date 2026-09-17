@@ -45,6 +45,18 @@ class MppsHardwareTransport(
      */
     val mppsAuthVerified: Boolean get() = _mppsAuthVerified
 
+    /** Human-readable reason the last [open] call failed, or null if it succeeded / was never called. */
+    var lastOpenError: String? = null
+        private set
+
+    /**
+     * True when the last [open] failure was specifically an unrecognized MPPS challenge
+     * (as opposed to a USB I/O problem). The caller should not attempt a generic serial
+     * fallback in this case: the dongle's proprietary framing means a raw UART driver
+     * cannot talk to the ECU through it regardless of the auth outcome.
+     */
+    var lastOpenWasAuthRejected: Boolean = false
+        private set
 
     override val isConnected: Boolean
         get() = connection != null
@@ -56,6 +68,8 @@ class MppsHardwareTransport(
         get() = "MPPS v18 (AMT Flash)"
 
     override fun open(baudRate: Int): Boolean {
+        lastOpenError = null
+        lastOpenWasAuthRejected = false
         try {
             close()
             Log.d(TAG, "Opening UsbDevice: ${device.deviceName} (0x${Integer.toHexString(device.vendorId)}:0x${Integer.toHexString(device.productId)})")
@@ -126,8 +140,15 @@ class MppsHardwareTransport(
             val v = getBatteryVoltage() ?: 0.0f
             Log.i(TAG, String.format("MPPS v18 initialized successfully! OBD2 Voltage: %.2fV", v))
             return true
+        } catch (e: MppsAuthenticationUnverifiedException) {
+            Log.e(TAG, "MPPS Open Exception: ${e.message}", e)
+            lastOpenError = e.message
+            lastOpenWasAuthRejected = true
+            close()
+            return false
         } catch (t: Throwable) {
             Log.e(TAG, "MPPS Open Exception: ${t.message}", t)
+            lastOpenError = t.message ?: t.javaClass.simpleName
             close()
             return false
         }

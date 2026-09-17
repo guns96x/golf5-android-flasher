@@ -399,8 +399,13 @@ class MainActivity : AppCompatActivity() {
                     }
                     startVoltageMonitoring()
                 } else {
+                    val reason = usbSerialManager.lastConnectError
                     withContext(Dispatchers.Main) {
-                        appendLog("[USB] Не вдалося ініціалізувати протокол адаптера.")
+                        if (reason != null) {
+                            appendLog("[USB] Не вдалося ініціалізувати протокол адаптера: $reason")
+                        } else {
+                            appendLog("[USB] Не вдалося ініціалізувати протокол адаптера.")
+                        }
                     }
                 }
             } catch (t: Throwable) {
