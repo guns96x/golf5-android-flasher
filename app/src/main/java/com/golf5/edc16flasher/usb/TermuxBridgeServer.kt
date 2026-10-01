@@ -18,6 +18,22 @@ object TermuxBridgeServer {
     private var running = false
     private var transport: MppsHardwareTransport? = null
 
+    /**
+     * Process-local switch for adapter/bus-mutating commands. Always false in normal use;
+     * only a developer build may flip it in code. Never exposed over the socket.
+     */
+    @Volatile
+    var developerMode: Boolean = false
+        private set
+
+    /** While true (an ECU operation owns the transport) every command except PING is refused. */
+    @Volatile
+    private var exclusiveOperationActive = false
+
+    fun setExclusiveOperationActive(active: Boolean) {
+        exclusiveOperationActive = active
+    }
+
     fun start(mppsTransport: MppsHardwareTransport) {
         transport = mppsTransport
         if (running) return
@@ -63,11 +79,16 @@ object TermuxBridgeServer {
                 val line = reader.readLine() ?: break
                 val trimmed = line.trim()
                 if (trimmed.isEmpty()) continue
-                val parts = trimmed.split(" ")
+                val parts = trimmed.split(Regex("\\s+"))
                 val cmd = parts[0].uppercase(Locale.US)
 
-                val response = try {
+                val decision = BridgeCommandPolicy.authorize(cmd, parts, developerMode, exclusiveOperationActive)
+                val response = if (decision is BridgeCommandPolicy.Decision.Deny) {
+                    decision.response
+                } else try {
                     executeCommand(cmd, parts)
+                } catch (e: InvalidHexException) {
+                    "ERR_HEX ${e.message}"
                 } catch (e: Exception) {
                     "ERR ${e.message}"
                 }
@@ -186,15 +207,5 @@ object TermuxBridgeServer {
         }
     }
 
-    private fun parseHex(hex: String): ByteArray {
-        val clean = hex.replace(" ", "").replace("0x", "")
-        val len = clean.length
-        val data = ByteArray(len / 2)
-        var i = 0
-        while (i < len) {
-            data[i / 2] = ((Character.digit(clean[i], 16) shl 4) + Character.digit(clean[i + 1], 16)).toByte()
-            i += 2
-        }
-        return data
-    }
+    private fun parseHex(hex: String): ByteArray = BridgeCommandPolicy.parseHexStrict(hex)
 }
