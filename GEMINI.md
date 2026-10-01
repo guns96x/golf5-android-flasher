@@ -129,13 +129,11 @@ For unknown challenges, fail closed. Do not use the current generic arithmetic f
 
 Do not change the two known capture vectors.
 
-## Termux bridge requirement
+## Standalone app requirement
 
-Keep TCP bind address exactly loopback-only (`127.0.0.1`).
-
-Normal mode is read-only for raw mutation commands. Developer mode must default to false.
-
-Do not expose EEPROM writes by default.
+The product is a standalone Android app. Termux CLI, the TCP bridge and any external
+control channel were removed on 2026-10-01 at the owner's request. Do not reintroduce
+network sockets, the INTERNET permission, exported command broadcasts or companion scripts.
 
 ## Work log
 
@@ -170,7 +168,6 @@ Before claiming completion run exactly:
 ```bash
 ./gradlew testDebugUnitTest
 ./gradlew assembleDebug
-python -m unittest termux/test_edc16_flasher.py
 git status --short
 ```
 

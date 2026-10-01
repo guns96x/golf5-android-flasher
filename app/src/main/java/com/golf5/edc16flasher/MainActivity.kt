@@ -32,7 +32,6 @@ import com.golf5.edc16flasher.protocol.FlashProtocolAdapter
 import com.golf5.edc16flasher.protocol.Kwp2000Protocol
 import com.golf5.edc16flasher.security.SecurityAccessAlgorithm
 import com.golf5.edc16flasher.security.SecurityAlgorithmSelector
-import com.golf5.edc16flasher.usb.TermuxBridgeServer
 import com.golf5.edc16flasher.usb.UsbSerialManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -118,17 +117,6 @@ class MainActivity : AppCompatActivity() {
                         usbSerialManager.close()
                         updateUiDisconnected()
                     }
-                    "com.golf5.edc16flasher.DIAGNOSTIC" -> {
-                        if (isBusy) {
-                            appendLog("[DIAG] Відхилено: триває операція з ЕБУ.")
-                            return
-                        }
-                        appendLog("[DIAG] Запуск повної апаратної діагностики MPPS...")
-                        runExclusive("DIAG") {
-                            val report = withContext(Dispatchers.IO) { usbSerialManager.runDiagnostic() }
-                            appendLog(report)
-                        }
-                    }
                 }
             } catch (t: Throwable) {
                 appendLog("[USB] Помилка обробки події USB: ${t.message}")
@@ -157,7 +145,6 @@ class MainActivity : AppCompatActivity() {
             addAction(UsbSerialManager.ACTION_USB_PERMISSION)
             addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
-            addAction("com.golf5.edc16flasher.DIAGNOSTIC")
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -194,6 +181,10 @@ class MainActivity : AppCompatActivity() {
             if (isBusy) return@setOnClickListener
             appendLog("[USB] Ручний повторний пошук адаптера...")
             checkUsbDevices()
+        }
+        binding.tvUsbStatus.setOnLongClickListener {
+            runAdapterDiagnostic()
+            true
         }
         binding.tvModeBanner.setOnClickListener { showEligibilityDetails() }
         binding.tvEligibility.setOnClickListener { showEligibilityDetails() }
@@ -481,7 +472,7 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Runs one ECU operation with the transport locked: no voltage polling, no reconnects,
-     * no Termux bridge traffic and all buttons disabled until it finishes.
+     * and all buttons disabled until it finishes.
      */
     private fun runExclusive(name: String, write: Boolean = false, block: suspend () -> Unit) {
         if (isBusy) {
@@ -491,7 +482,6 @@ class MainActivity : AppCompatActivity() {
         isBusy = true
         isWriteActive = write
         voltageJob?.cancel()
-        TermuxBridgeServer.setExclusiveOperationActive(true)
         if (write) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         refreshCapabilityUi()
         lifecycleScope.launch {
@@ -502,7 +492,6 @@ class MainActivity : AppCompatActivity() {
             } finally {
                 isBusy = false
                 isWriteActive = false
-                TermuxBridgeServer.setExclusiveOperationActive(false)
                 window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 refreshCapabilityUi()
                 if (usbSerialManager.isConnected) startVoltageMonitoring()
@@ -511,6 +500,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ── Read-only operations ────────────────────────────────────────────────
+
+    /** Adapter self-diagnostic (long-press on the USB status line). */
+    private fun runAdapterDiagnostic() {
+        if (!ensureUsbConnected()) return
+        runExclusive("DIAG") {
+            appendLog("[DIAG] Апаратна діагностика адаптера...")
+            val report = withContext(Dispatchers.IO) { usbSerialManager.runDiagnostic() }
+            appendLog(report)
+        }
+    }
 
     private fun readEcuId() {
         if (!ensureUsbConnected()) return

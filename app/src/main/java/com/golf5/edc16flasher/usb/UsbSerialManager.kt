@@ -90,7 +90,6 @@ class UsbSerialManager(private val context: Context) : KwpTransport {
             val mppsTransport = MppsHardwareTransport(context, usbManager, device)
             if (mppsTransport.open(baudRate)) {
                 activeTransport = mppsTransport
-                TermuxBridgeServer.start(mppsTransport)
                 return true
             }
             Log.w(TAG, "Native MPPS open failed, attempting fallback...")
@@ -134,7 +133,6 @@ class UsbSerialManager(private val context: Context) : KwpTransport {
     }
 
     fun close() {
-        TermuxBridgeServer.stop()
         try {
             activeTransport?.close()
         } catch (ignored: Exception) {

@@ -672,10 +672,6 @@ class MppsHardwareTransport(
         return ascii
     }
 
-    fun reinitHardwarePublic() = synchronized(transportLock) {
-        performHandshake()
-    }
-
     private fun readEE(addr: Int, size: Int): ByteArray {
         val conn = connection ?: throw IOException("Not connected")
         val result = ByteArray(size)
@@ -700,32 +696,6 @@ class MppsHardwareTransport(
             throw IOException("EEPROM write failed at 0x${Integer.toHexString(addr)}")
         }
     }
-
-    fun readEEPublic(addr: Int, size: Int): ByteArray = readEE(addr, size)
-    fun writeEEPublic(addr: Int, data: ByteArray) = writeEE(addr, data)
-    fun writeRawPublic(data: ByteArray, masked: Boolean = true) {
-        val conn = connection ?: throw IOException("Not connected")
-        val epOut = endpointOut ?: throw IOException("No OUT endpoint")
-        val toSend = if (masked) {
-            val enc = ByteArray(data.size)
-            for (i in data.indices) {
-                enc[i] = ((data[i].toInt() and 0xFF) xor writeBitmask).toByte()
-            }
-            enc
-        } else {
-            data
-        }
-        conn.bulkTransfer(epOut, toSend, toSend.size, 1000)
-        conn.bulkTransfer(epOut, ByteArray(0), 0, 100) // ZLP terminator
-    }
-    fun readRawPublic(expectedSize: Int, timeoutMs: Int = 1000): ByteArray = readRaw(expectedSize, timeoutMs)
-    fun controlTransfer(reqType: Int, req: Int, value: Int, index: Int, buffer: ByteArray?, length: Int, timeout: Int): Int {
-        val conn = connection ?: throw IOException("Not connected")
-        return conn.controlTransfer(reqType, req, value, index, buffer, length, timeout)
-    }
-    fun setBaudratePublic(baud: Int) = setBaudrate(baud)
-    fun setDtrPublic(on: Boolean) = setDtr(on)
-    fun setRtsPublic(on: Boolean) = setRts(on)
 
     private fun writeRaw(data: ByteArray) {
         val conn = connection ?: throw IOException("Not connected")

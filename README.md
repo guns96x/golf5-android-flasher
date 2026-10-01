@@ -1,11 +1,12 @@
-# Golf 5 1.9 TDI BLS — Android USB-OTG Flasher & Firmware Tool
+# Golf 5 1.9 TDI BLS — автономний Android USB-OTG флешер
 **ЕБУ**: Bosch EDC16U34 (`03G906021QJ`, SW `391847` / `1037391847P447HAXN`)  
 **Автомобіль**: Volkswagen Golf 5 (1K1), 1.9 TDI 105 к.с. (BLS)
 
-Android-застосунок і Termux CLI для роботи з EDC16U34 через USB-OTG та адаптер MPPS / KKL 409.1.
+Автономний Android-застосунок для роботи з EDC16U34 через USB-OTG та адаптер MPPS / KKL 409.1.
+Не потребує Termux, ПК, інтернету чи сторонніх застосунків (дозволу INTERNET немає).
 
 > ⚠️ **Фізичний запис у реальний ЕБУ зараз ЗАБЛОКОВАНО (fail-closed).** Алгоритм Seed/Key для BLS
-> не підтверджено реальними векторами, тому застосунок показує `PHYSICAL / READ ONLY`, а CLI відмовляє у `--flash`.
+> не підтверджено реальними векторами, тому застосунок показує `PHYSICAL / READ ONLY`.
 > Повний цикл запису (бекап → запис → повне зчитування → SHA-256) перевірено **тільки на вбудованому емуляторі**.
 
 Документи, що визначають поведінку:
@@ -27,8 +28,6 @@ Android-застосунок і Termux CLI для роботи з EDC16U34 че�
 | MPPS known challenge vectors (2 шт.) | Tested; unknown challenge → **fail-closed** |
 | Physical ECU ID / read (backup) | Implemented, not hardware-verified in this repo |
 | Physical write | **Not release-ready**: blocked by `SECURITY_ALGORITHM_UNVERIFIED` |
-| Termux bridge (127.0.0.1:8888) | Read-only by default; mutating commands need developer mode; busy-lock during ECU ops |
-| Termux CLI write (`--flash`) | **Blocked**: unverified seed/key and no voltage source |
 
 ### Ворота запису (усі мають бути виконані)
 Транспорт підключено; ID містить і `03G906021QJ`, і `391847` (Recovery пропускає лише цю перевірку);
@@ -51,11 +50,10 @@ golf5-android-flasher/
 │   ├── firmware/                    # Профіль EDC16U34 і рушій КС (fix/verify)
 │   ├── protocol/                    # KWP2000 кодек кадрів, протокол, адаптер, read-only EcuFlasher
 │   ├── security/                    # Seed/Key: LegacyBls (unverified), Mock (тільки емулятор)
-│   └── usb/                         # MPPS v18, KKL serial, емулятор, Termux bridge
-├── app/src/test/                    # JVM тести (емулятор, транзакція, кодек, КС, bridge policy)
+│   └── usb/                         # MPPS v18, KKL serial, емулятор
+├── app/src/test/                    # JVM тести (емулятор, транзакція, кодек, КС)
 ├── binaries/, app/src/main/assets/  # Тюнінгові образи Stage 1 (НЕ заводські)
-├── termux/                          # CLI (pyserial) + test_edc16_flasher.py
-└── .github/workflows/android-ci.yml # testDebugUnitTest, assembleDebug, Python tests
+└── .github/workflows/android-ci.yml # testDebugUnitTest, assembleDebug
 ```
 
 ---
@@ -83,22 +81,11 @@ golf5-android-flasher/
    Емулятор пройде бекап, запис, повне зчитування та звірку SHA-256.
 3. З авто (зараз тільки читання): режим «У літаку», запалювання увімкнено, двигун не запускати, споживачі вимкнено;
    підключіть адаптер через OTG і дозвольте доступ до USB → **ECU ID** → **READ ECU** (бекап зберігається
-   у `Android/data/com.golf5.edc16flasher/files/`). Кнопки WRITE/RECOVERY лишатимуться вимкненими з поясненням причин.
-
-## 💻 Termux CLI
-
-```bash
-cd termux && ./setup_termux.sh
-python edc16_flasher.py -l                              # порти
-python edc16_flasher.py -p /dev/ttyUSB0 -i              # ID ЕБУ
-python edc16_flasher.py -p /dev/ttyUSB0 -r backup.bin   # бекап калібрування
-python -m unittest termux/test_edc16_flasher.py         # офлайн тести (з кореня репозиторію)
-```
-`-f/--flash` відмовляє до відкриття порту, доки seed/key не верифіковано і немає джерела напруги.
+   у `Android/data/com.golf5.edc16flasher/files/`). Довге натискання на рядок статусу USB — діагностика адаптера. Кнопки WRITE/RECOVERY лишатимуться вимкненими з поясненням причин.
 
 ---
 
-## 🔒 Контрольні суми бінарних файлів (перевірено `sha256sum`/`md5sum` по файлах у репозиторії)
+## 🔒 Контрольні суми бінарних файлів (перевірено `sha256sum`/`md5sum` по файлах у репозиторії; копії в `binaries/` та `app/src/main/assets/` ідентичні)
 
 | Файл | Розмір | SHA-256 | КС профілю |
 |---|---|---|---|
