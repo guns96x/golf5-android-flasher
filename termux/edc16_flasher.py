@@ -7,7 +7,7 @@ Full MPPS functionality:
 - ECU Identification (0x1A 0x9B / 0x21 0x80)
 - Read Calibration Area to file (0x35 RequestUpload)
 - Write Flash with Automatic Bosch EDC16 Checksum Calculation (0xD01FE500 invariant)
-- Recovery Mode (bypasses ID check, direct bootloader flash)
+- Recovery Mode (skips ID verification, direct calibration session)
 - Clear DTCs (0x14 Clear Diagnostic Info)
 - Safe 128-byte K-Line packet sizing & half-duplex echo cancellation
 """

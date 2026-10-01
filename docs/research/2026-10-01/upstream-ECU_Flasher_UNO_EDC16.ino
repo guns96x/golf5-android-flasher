@@ -1108,7 +1108,7 @@ word Encrypt(long start, long finish)
 boolean LVL3Key()
 {
   lcd.setCursor(0,1);
-  flp("Bypass auth...");
+  flp("Security auth...");
   delay(25);
   iso_sendstring(5,4);//Request LVL3 security access
   for(byte s=0; s<10; s++)
@@ -1173,7 +1173,7 @@ boolean LVL1Key()
 //Aternative keys, not yet know for what ecu: 5D5B 5FBD
 {
   lcd.setCursor(0,1);
-  flp("Bypass auth...");    
+  flp("Security auth...");    
     delay(25);   
     iso_sendstring(5,5);//request LVL1 security access
     for(byte s=0; s<10; s++)

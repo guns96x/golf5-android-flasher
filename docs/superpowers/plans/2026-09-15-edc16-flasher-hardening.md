@@ -20,7 +20,7 @@
 - Expected additive 32-bit big-endian residue is exactly `0xD01FE500` for each declared checksum block.
 - Do not infer unknown checksum regions, seed/key algorithms, MPPS authentication formulas, CAN commands or TP2.0 behavior.
 - Unknown security/authentication state means physical write capability is false.
-- Recovery mode may bypass ECU ID only; it may not bypass voltage, image-size, checksum, security-verification or transport-integrity gates.
+- Recovery mode may skip ECU ID only; it may not skip voltage, image-size, checksum, security-verification or transport-integrity gates.
 - No physical flash success message before full 512 KiB read-back SHA-256 verification succeeds.
 - Keep Termux bridge bound to `127.0.0.1` only.
 - Do not add EDC17 support in this plan.

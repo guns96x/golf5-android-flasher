@@ -38,7 +38,7 @@ Physical write eligibility requires all of these conditions at the same time:
 - MPPS hardware authentication implementation is marked verified for the connected adapter path, or a non-MPPS serial path does not depend on MPPS authentication.
 - A pre-flash backup of the 512 KiB calibration region has completed successfully in the same application session.
 
-If any condition is false or unknown, the write button remains disabled and the API returns a typed refusal reason. Recovery mode may bypass ECU identification only; it may not bypass voltage, image-size, checksum-profile, transport-integrity, security-access verification, or explicit user confirmation.
+If any condition is false or unknown, the write button remains disabled and the API returns a typed refusal reason. Recovery mode may skip ECU identification only; it may not skip voltage, image-size, checksum-profile, transport-integrity, security-access verification, or explicit user confirmation.
 
 ## Architecture
 
@@ -238,7 +238,7 @@ At minimum, automated tests must cover:
 - Guessing additional MPPS proprietary commands.
 - General CAN/TP2.0 flashing support.
 - Automatic checksum discovery.
-- Automatic seed/key reverse engineering.
+- Automatic seed/key derivation analysis.
 - Changing repository visibility or rewriting Git history to remove existing binaries.
 
 Those items may be handled only after the EDC16/K-Line path above is deterministic and green in CI.

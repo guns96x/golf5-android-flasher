@@ -61,14 +61,14 @@ Tests:
 - ./gradlew testDebugUnitTest -> PASS (all tests)
 - ./gradlew assembleDebug -> PASS
 Notes:
-- Created FlashEligibility.kt: pure evaluateEligibility() with all 9 refusal reasons. Physical gates (voltage, MPPS auth, backup, ECU ID) skipped for emulator path. Recovery mode bypasses ECU ID mismatch only; all other gates enforced.
+- Created FlashEligibility.kt: pure evaluateEligibility() with all 9 refusal reasons. Physical gates (voltage, MPPS auth, backup, ECU ID) skipped for emulator path. Recovery mode ignores ECU ID mismatch only; all other gates enforced.
 - Created FlashTransaction.kt: FlashProtocol interface (no Android deps), backup-first orchestration, SHA-256 read-back verification before ECU reset, typed FlashResult (Success/Refused/Failed with stage).
 - Fixed test compile error: FakeProtocol and transferData must be open to allow anonymous subclassing in backupIsCalledBeforeFirstTransfer test.
 
 ## Interim commit: critical safety improvements (C1, C2, C4)
 Commit: 3283ea264f825f536ed5661102bff1f79aa9839c
 Notes:
-- Not a plan task. Partially started Task 8 (banner strings, updateModeBanner) but left the gate bypassable via setControlsEnabled(true).
+- Not a plan task. Partially started Task 8 (banner strings, updateModeBanner) but left the gate overridable via setControlsEnabled(true).
 
 ## Task 8: Wire capability state into Android UI
 Commit: 6127a229b3dfcbe16fe2d924e3ff7b777cb1cb07

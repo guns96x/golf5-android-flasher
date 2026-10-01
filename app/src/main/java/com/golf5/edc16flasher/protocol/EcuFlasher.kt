@@ -113,7 +113,7 @@ class EcuFlasher(
 
     /**
      * MPPS Emergency Recovery Mode:
-     * Bypasses standard identification checks, forces wake-up and direct programming session.
+     * Omits standard identification checks, forces wake-up and direct programming session.
      */
     suspend fun recoveryFlash(
         rawBytes: ByteArray,

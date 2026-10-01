@@ -42,7 +42,7 @@ The following are evidence-controlled and must never be guessed:
 - unknown MPPS commands;
 - checksum regions outside the documented profile;
 - CAN or TP2.0 flashing behavior;
-- recovery behavior that bypasses documented safety gates.
+- recovery behavior that skips documented safety gates.
 
 When evidence is insufficient, keep the affected physical capability disabled and report the missing evidence.
 
@@ -75,7 +75,7 @@ The current legacy BLS seed/key formula is unverified until real known-good vect
 A physical flash must not start unless the implementation proves all applicable conditions:
 
 - connected physical transport;
-- parsed ECU identification matches both `03G906021QJ` and `391847`, except ID may be bypassed only in explicit recovery mode;
+- parsed ECU identification matches both `03G906021QJ` and `391847`, except ID check may be skipped only in explicit recovery mode;
 - voltage is readable and at least `12.2 V` immediately before destructive programming;
 - selected image is exactly 2 MiB;
 - checksum is fixed and independently verified against the declared profile;
@@ -84,7 +84,7 @@ A physical flash must not start unless the implementation proves all applicable 
 - a same-session calibration backup completed before the destructive request;
 - no competing transport transaction is active.
 
-Recovery mode does not bypass voltage, image, checksum, transport-integrity, security-verification, authentication-verification or backup requirements.
+Recovery mode does not skip voltage, image, checksum, transport-integrity, security-verification, authentication-verification or backup requirements.
 
 ## Success definition
 
