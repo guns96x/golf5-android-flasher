@@ -145,6 +145,17 @@ class MockEdc16Transport(private val context: Context? = null) : IUsbTransport {
         this.faults = faults
     }
 
+    /** Test hook: flips one byte that the next upload will return (simulates read-back corruption). */
+    internal fun corruptByteForTest(address: Int) {
+        flashMemory[address] = (flashMemory[address].toInt() xor 0xFF).toByte()
+    }
+
+    /** Test hook: overwrite emulator flash (e.g. to start from a known "factory" image). */
+    internal fun loadImageForTest(image: ByteArray) {
+        require(image.size == flashMemory.size)
+        flashMemory = image.copyOf()
+    }
+
     private fun emitFrame(sid: Int, payload: ByteArray) {
         val dataLen = 1 + payload.size
         val headerLen = if (dataLen <= 63) 3 else 4
@@ -193,6 +204,10 @@ class MockEdc16Transport(private val context: Context? = null) : IUsbTransport {
         when (sid) {
             0x10 -> { // Start Diagnostic Session
                 val sub = if (payload.isNotEmpty()) payload[0] else 0x81.toByte()
+                // A new session re-locks the ECU and aborts any open transfer.
+                securityUnlocked = false
+                uploadState = null
+                downloadState = null
                 emitFrame(0x50, byteArrayOf(sub, 0x00, 0x32, 0x01, 0xF4.toByte()))
             }
             0x1A -> { // Read ECU Identification
@@ -227,6 +242,10 @@ class MockEdc16Transport(private val context: Context? = null) : IUsbTransport {
                 }
             }
             0x34 -> { // Request Download
+                if (!securityUnlocked) {
+                    emitNegative(0x34, 0x33) // Security Access Denied
+                    return
+                }
                 if (payload.size < 7) {
                     emitNegative(0x34, 0x13) // Incorrect Message Length
                     return
@@ -254,6 +273,10 @@ class MockEdc16Transport(private val context: Context? = null) : IUsbTransport {
                 emitFrame(0x74, byteArrayOf(0x00, 0x80.toByte()))
             }
             0x35 -> { // Request Upload
+                if (!securityUnlocked) {
+                    emitNegative(0x35, 0x33) // Security Access Denied
+                    return
+                }
                 if (payload.size < 7) {
                     emitNegative(0x35, 0x13)
                     return
@@ -264,6 +287,11 @@ class MockEdc16Transport(private val context: Context? = null) : IUsbTransport {
                 val uncompressedSize = ((payload[4].toInt() and 0xFF) shl 16) or
                         ((payload[5].toInt() and 0xFF) shl 8) or
                         (payload[6].toInt() and 0xFF)
+
+                if (startAddress < 0x180000 || startAddress + uncompressedSize > 0x200000 || uncompressedSize <= 0) {
+                    emitNegative(0x35, 0x31) // Request Out Of Range
+                    return
+                }
 
                 uploadState = UploadState(
                     start = startAddress,

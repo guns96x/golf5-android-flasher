@@ -1,36 +1,40 @@
 package com.golf5.edc16flasher.protocol
 
 import com.golf5.edc16flasher.flashing.FlashProtocol
+import com.golf5.edc16flasher.security.SecurityAccessAlgorithm
+import java.io.IOException
 
 /**
- * Adapter that bridges Kwp2000Protocol to FlashProtocol interface.
- * Used by MainActivity to migrate from EcuFlasher to FlashTransaction (C6 fix).
+ * Bridges [Kwp2000Protocol] to the [FlashProtocol] surface consumed by
+ * [com.golf5.edc16flasher.flashing.FlashTransaction].
+ *
+ * @param security      algorithm for SID 0x27; its [SecurityAccessAlgorithm.verified] flag is
+ *                      reported to the transaction, which refuses to write when it is false
+ * @param recoveryMode  re-run KWP fast init before entering the programming session
+ *                      (same sequence as [Kwp2000Protocol.forceRecoverySession])
  */
-class FlashProtocolAdapter(private val kwp: Kwp2000Protocol) : FlashProtocol {
+class FlashProtocolAdapter(
+    private val kwp: Kwp2000Protocol,
+    private val security: SecurityAccessAlgorithm,
+    private val recoveryMode: Boolean = false,
+) : FlashProtocol {
+
+    override val securityAlgorithmVerified: Boolean
+        get() = security.verified
 
     override fun startDiagnosticSession(mode: Byte): Boolean {
-        return try {
-            kwp.startDiagnosticSession(mode)
-            true
-        } catch (e: Exception) {
-            false
-        }
+        return if (recoveryMode) kwp.forceRecoverySession() else kwp.startDiagnosticSession(mode)
     }
 
     override fun performSecurityAccess(): Boolean {
-        return try {
-            val seed = kwp.requestSecuritySeed()
-            val key = Edc16Security.calculateKey(seed)
-            kwp.sendSecurityKey(key)
-            true
-        } catch (e: Exception) {
-            false
-        }
+        val seed = kwp.requestSecuritySeed()
+        val key = security.calculateKey(seed)
+        return kwp.sendSecurityKey(key)
     }
 
     override fun requestDownload(address: Int, size: Int): Int {
-        kwp.requestDownload(address, size)
-        return 128  // EDC16 standard block size
+        if (!kwp.requestDownload(address, size)) throw IOException("RequestDownload rejected")
+        return BLOCK_SIZE
     }
 
     override fun transferData(sequence: Byte, data: ByteArray): Boolean {
@@ -38,12 +42,7 @@ class FlashProtocolAdapter(private val kwp: Kwp2000Protocol) : FlashProtocol {
     }
 
     override fun requestTransferExit(): Boolean {
-        return try {
-            kwp.requestTransferExit()
-            true
-        } catch (e: Exception) {
-            false
-        }
+        return kwp.requestTransferExit()
     }
 
     override fun requestUpload(address: Int, size: Int): Int {
@@ -54,7 +53,12 @@ class FlashProtocolAdapter(private val kwp: Kwp2000Protocol) : FlashProtocol {
         return kwp.readMemoryChunk(sequence, blockSize)
     }
 
-    override fun resetEcu() {
-        kwp.ecuReset()
+    override fun resetEcu(): Boolean {
+        return kwp.ecuReset()
+    }
+
+    private companion object {
+        /** EDC16 K-Line TransferData payload limit enforced by [Kwp2000Protocol.transferData]. */
+        const val BLOCK_SIZE = 128
     }
 }

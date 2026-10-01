@@ -1,5 +1,7 @@
 package com.golf5.edc16flasher.flashing
 
+import com.golf5.edc16flasher.firmware.EcuFirmwareProfile
+
 /**
  * All reasons a flash operation may be refused.
  * Task 7 / FlashEligibility spec.
@@ -56,11 +58,15 @@ sealed interface FlashEligibility {
     data class Refused(val reasons: Set<FlashRefusalReason>) : FlashEligibility
 }
 
-private const val FULL_IMAGE_SIZE = 0x200_000   // 2 MiB — EDC16U34 profile
-private const val MIN_VOLTAGE = 12.2f           // Minimum physical programming voltage
+private val PROFILE = EcuFirmwareProfile.EDC16U34_03G906021QJ_391847
+private val FULL_IMAGE_SIZE = PROFILE.fullImageSize   // 2 MiB — EDC16U34 profile
+
+/** Minimum physical programming voltage. */
+const val MIN_PROGRAMMING_VOLTAGE = 12.2f
+private const val MIN_VOLTAGE = MIN_PROGRAMMING_VOLTAGE
 
 /** Required ECU identifier substrings for EDC16U34_03G906021QJ_391847. */
-private val REQUIRED_ECU_IDS = setOf("03G906021QJ", "391847")
+private val REQUIRED_ECU_IDS = PROFILE.requiredIdentifiers
 
 /**
  * Pure function — evaluates [preflight] and returns [FlashEligibility].

@@ -4,6 +4,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 class SecurityAccessTest {
@@ -36,5 +37,12 @@ class SecurityAccessTest {
         val key2 = LegacyBlsSecurityAlgorithm.calculateKey(seed)
         assertEquals(4, key1.size)
         assertArrayEquals(key1, key2)
+    }
+
+    @Test
+    fun physicalTransportNeverGetsMockAlgorithm() {
+        assertSame(LegacyBlsSecurityAlgorithm, SecurityAlgorithmSelector.forTransport(isPhysical = true))
+        assertFalse(SecurityAlgorithmSelector.forTransport(isPhysical = true).verified)
+        assertSame(MockSecurityAlgorithm, SecurityAlgorithmSelector.forTransport(isPhysical = false))
     }
 }

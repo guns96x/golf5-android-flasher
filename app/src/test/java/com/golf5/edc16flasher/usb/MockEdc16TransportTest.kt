@@ -2,6 +2,7 @@ package com.golf5.edc16flasher.usb
 
 import com.golf5.edc16flasher.protocol.Kwp2000Protocol
 import com.golf5.edc16flasher.protocol.KwpNegativeResponseException
+import com.golf5.edc16flasher.security.MockSecurityAlgorithm
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -12,11 +13,47 @@ import java.io.IOException
 
 class MockEdc16TransportTest {
 
-    private fun setupEmulator(): Pair<MockEdc16Transport, Kwp2000Protocol> {
+    private fun setupEmulator(unlock: Boolean = true): Pair<MockEdc16Transport, Kwp2000Protocol> {
         val mock = MockEdc16Transport()
         mock.open()
         val protocol = Kwp2000Protocol(mock)
+        if (unlock) {
+            assertTrue(protocol.startDiagnosticSession(0x85.toByte()))
+            val seed = protocol.requestSecuritySeed()
+            assertTrue(protocol.sendSecurityKey(MockSecurityAlgorithm.calculateKey(seed)))
+        }
         return Pair(mock, protocol)
+    }
+
+    @Test
+    fun requestDownloadWithoutSecurityAccessIsDenied() {
+        val (_, protocol) = setupEmulator(unlock = false)
+        val exc = assertThrows(KwpNegativeResponseException::class.java) {
+            protocol.requestDownload(0x180000, 128)
+        }
+        assertEquals(0x34, exc.failedSid)
+        assertEquals(0x33, exc.nrc)
+    }
+
+    @Test
+    fun requestUploadWithoutSecurityAccessIsDenied() {
+        val (_, protocol) = setupEmulator(unlock = false)
+        val exc = assertThrows(KwpNegativeResponseException::class.java) {
+            protocol.requestUpload(0x180000, 128)
+        }
+        assertEquals(0x35, exc.failedSid)
+        assertEquals(0x33, exc.nrc)
+    }
+
+    @Test
+    fun wrongSecurityKeyIsRejected() {
+        val (_, protocol) = setupEmulator(unlock = false)
+        val seed = protocol.requestSecuritySeed()
+        val wrongKey = MockSecurityAlgorithm.calculateKey(seed).also { it[0] = (it[0].toInt() xor 1).toByte() }
+        val exc = assertThrows(KwpNegativeResponseException::class.java) {
+            protocol.sendSecurityKey(wrongKey)
+        }
+        assertEquals(0x35, exc.nrc)
     }
 
     @Test

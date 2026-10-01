@@ -1,5 +1,6 @@
 package com.golf5.edc16flasher.flashing
 
+import com.golf5.edc16flasher.firmware.Edc16ChecksumEngine
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -10,6 +11,7 @@ import org.junit.Test
 private open class FakeProtocol(
     /** If non-null, this override is returned instead of real read-back bytes. */
     private val readBackOverride: ByteArray? = null,
+    override val securityAlgorithmVerified: Boolean = true,
 ) : FlashProtocol {
 
     private val memory = ByteArray(0x080000)  // 512 KiB calibration region
@@ -55,7 +57,7 @@ private open class FakeProtocol(
         if (seq != dlSequence) return false
         System.arraycopy(data, 0, memory, dlCursor, data.size)
         dlCursor += data.size
-        dlSequence = (dlSequence % 255) + 1
+        dlSequence = (dlSequence + 1) and 0xFF
         return true
     }
 
@@ -81,11 +83,11 @@ private open class FakeProtocol(
             memory.copyOfRange(ulCursor, ulCursor + len)
         }
         ulCursor += len
-        ulSequence = (ulSequence % 255) + 1
+        ulSequence = (ulSequence + 1) and 0xFF
         return chunk
     }
 
-    override fun resetEcu() { /* no-op in fake */ }
+    override fun resetEcu(): Boolean = true
 
     /** Expose memory for snapshot assertions. */
     fun snapshot(offset: Int, size: Int): ByteArray = memory.copyOfRange(offset, offset + size)
@@ -93,10 +95,11 @@ private open class FakeProtocol(
 
 class FlashTransactionTest {
 
+    /** Deterministic 2 MiB image with a valid EDC16 checksum. */
     private fun makeFullImage(calibrationFill: Byte = 0xAA.toByte()): ByteArray {
         val img = ByteArray(0x200000)
         for (i in 0x180000 until 0x200000) img[i] = calibrationFill
-        return img
+        return Edc16ChecksumEngine.fix(img)
     }
 
     private fun eligibleEmulatorPreflight() = FlashPreflight(
@@ -173,7 +176,7 @@ class FlashTransactionTest {
     fun readBackCorruptionReturnsFailed() {
         val image = makeFullImage(0xCC.toByte())
         // Override read-back with corrupted bytes (one byte different)
-        val corruptedReadBack = ByteArray(0x080000) { 0xCC.toByte() }.also { it[1000] = 0x00 }
+        val corruptedReadBack = image.copyOfRange(0x180000, 0x200000).also { it[1000] = 0x00 }
 
         val fake = FakeProtocol(readBackOverride = corruptedReadBack)
 
@@ -219,5 +222,75 @@ class FlashTransactionTest {
         val success = result as FlashResult.Success
         assertEquals(64, success.writtenSha256.length)
         assertEquals(64, success.backupSha256.length)
+    }
+
+    @Test
+    fun invalidChecksumImageIsRefusedEvenIfPreflightClaimsValid() {
+        val image = makeFullImage().also { it[0x180010] = (it[0x180010] + 1).toByte() }
+        var backupCalled = false
+        val result = FlashTransaction(
+            preflight = eligibleEmulatorPreflight(),
+            imageBytes = image,
+            protocol = FakeProtocol(),
+            onBackup = { backupCalled = true },
+        ).execute()
+        assertEquals(FlashResult.Refused(setOf(FlashRefusalReason.CHECKSUM_INVALID)), result)
+        assertFalse(backupCalled)
+    }
+
+    @Test
+    fun unverifiedProtocolSecurityIsRefusedEvenIfPreflightClaimsVerified() {
+        val result = FlashTransaction(
+            preflight = eligibleEmulatorPreflight(),
+            imageBytes = makeFullImage(),
+            protocol = FakeProtocol(securityAlgorithmVerified = false),
+            onBackup = {},
+        ).execute()
+        assertEquals(FlashResult.Refused(setOf(FlashRefusalReason.SECURITY_ALGORITHM_UNVERIFIED)), result)
+    }
+
+    @Test
+    fun physicalVoltageDropBeforeDownloadRefusesWithoutWriting() {
+        var transfers = 0
+        val protocol = object : FakeProtocol() {
+            override fun transferData(sequence: Byte, data: ByteArray): Boolean {
+                transfers++
+                return super.transferData(sequence, data)
+            }
+        }
+        val physical = eligibleEmulatorPreflight().copy(
+            physical = true, mpps = true, mppsAuthVerified = true, voltage = 13.0f, backupCompleted = true,
+        )
+        val result = FlashTransaction(
+            preflight = physical,
+            imageBytes = makeFullImage(),
+            protocol = protocol,
+            onBackup = {},
+            voltageProbe = { 11.9f },
+        ).execute()
+        assertEquals(FlashResult.Refused(setOf(FlashRefusalReason.VOLTAGE_TOO_LOW)), result)
+        assertEquals(0, transfers)
+    }
+
+    @Test
+    fun emptyUploadChunkFailsInsteadOfLooping() {
+        val protocol = object : FakeProtocol() {
+            override fun readMemoryChunk(sequence: Byte, blockSize: Int): ByteArray = ByteArray(0)
+        }
+        val result = FlashTransaction(
+            preflight = eligibleEmulatorPreflight(),
+            imageBytes = makeFullImage(),
+            protocol = protocol,
+            onBackup = {},
+        ).execute()
+        assertTrue(result is FlashResult.Failed && result.stage == FlashStage.BACKUP)
+    }
+
+    @Test
+    fun blockSequenceWrapsFromFfToZero() {
+        assertEquals(0x01.toByte(), blockSequence(0))
+        assertEquals(0xFF.toByte(), blockSequence(254))
+        assertEquals(0x00.toByte(), blockSequence(255))
+        assertEquals(0x01.toByte(), blockSequence(256))
     }
 }
