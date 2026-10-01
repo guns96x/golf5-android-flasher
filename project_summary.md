@@ -1,3 +1,7 @@
+> ⚠️ **SUPERSEDED (2026-10-01):** статуси «100%», «Verified» та поріг 12.0V у цьому файлі застарілі й не підтверджені.
+> Актуальний статус — таблиця в [`README.md`](README.md): фізичний запис заблоковано (seed/key не верифіковано),
+> повний цикл запису перевірено тільки на емуляторі, поріг напруги 12.2V.
+
 # Project Summary: GOLF5-ANDROID-FLASHER (Android ECU Flasher)
 **Last Updated**: 2026-09-14 | **Status**: Phase 1 (EDC16U34 K-Line) 100% Implemented & Verified
 
