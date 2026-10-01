@@ -110,10 +110,19 @@ Notes:
 - *_dpf_egr_off.bin fails the declared checksum profile; it differs from *_CS_OK.bin only at 0x1BFFFC..0x1BFFFF and 0x1FDFFC..0x1FDFFF; after fix it equals *_CS_OK.bin byte for byte.
 - CI run result: pending first push.
 
+## Standalone app (owner request: no Termux)
+Commit: 0ceb929f080b4eb288694356f2a373f157bde39a
+Tests:
+- ./gradlew testDebugUnitTest -> PASS (68 tests, 0 failures)
+- ./gradlew assembleDebug -> PASS
+Notes:
+- Supersedes Task 9: Termux bridge, Python CLI and their tests removed entirely; INTERNET permission and exported DIAGNOSTIC broadcast removed.
+- Python profile-parity test no longer applies (single Kotlin implementation).
+
 ## Physical write
 Status: BLOCKED_EVIDENCE
 Missing fact: real EDC16U34 03G906021QJ/391847 seed -> key vectors with provenance
-Capability remains fail-closed: physical write and recovery (app: SECURITY_ALGORITHM_UNVERIFIED; CLI: also VOLTAGE_UNAVAILABLE)
+Capability remains fail-closed: physical write and recovery (SECURITY_ALGORITHM_UNVERIFIED)
 Observed evidence:
 - none committed; LegacyBlsSecurityAlgorithm.verified = false
 Next permitted action:
