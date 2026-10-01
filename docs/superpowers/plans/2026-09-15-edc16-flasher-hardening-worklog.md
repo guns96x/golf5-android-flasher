@@ -2,7 +2,7 @@
 
 Plan: `docs/superpowers/plans/2026-09-15-edc16-flasher-hardening.md`
 
-Status: `IN_PROGRESS`
+Status: `COMPLETE (emulator)` — physical write `BLOCKED_EVIDENCE` (see end of task records)
 
 ## Task 1: Add JVM test harness and pure transport boundary
 Commit: 51e412b5843f82136c26a413fd744b3af5491fec
@@ -45,7 +45,7 @@ Notes:
 - Fixed nrc78Count handling: emit all NRC 0x78 frames first, then fall through to the real response handler instead of returning early. This allows Kwp2000Protocol to drain NRC 0x78 frames from rxQueue and then receive the positive response without retransmitting.
 
 ## Task 6: Isolate MPPS authentication and reject unknown challenges
-Commit: 00e563a (run `git rev-parse HEAD` for full SHA)
+Commit: 00e563a48003c6794915dc1b74a4279254d0ee3b
 Tests:
 - ./gradlew testDebugUnitTest -> PASS (32 tests)
 - ./gradlew assembleDebug -> PASS
@@ -56,7 +56,7 @@ Notes:
 - Added mppsAuthVerified: Boolean property on MppsHardwareTransport; reset to false on close().
 
 ## Task 7: Add typed flash eligibility and full verified transaction
-Commit: 6b572cb (run `git rev-parse HEAD` for full SHA)
+Commit: 6b572cbcb6a36665fdaf043f575c1814f2227990
 Tests:
 - ./gradlew testDebugUnitTest -> PASS (all tests)
 - ./gradlew assembleDebug -> PASS
@@ -65,6 +65,60 @@ Notes:
 - Created FlashTransaction.kt: FlashProtocol interface (no Android deps), backup-first orchestration, SHA-256 read-back verification before ECU reset, typed FlashResult (Success/Refused/Failed with stage).
 - Fixed test compile error: FakeProtocol and transferData must be open to allow anonymous subclassing in backupIsCalledBeforeFirstTransfer test.
 
+
+## Task 7 follow-up: route all writes through FlashTransaction
+Commit: b0fc49ccd1cdbdbba8911209312f9568b18d04a6
+Tests:
+- ./gradlew testDebugUnitTest -> PASS (75 tests, 0 failures)
+- ./gradlew assembleDebug -> PASS
+Notes:
+- Acceptance gap fixed: the Task 7 "emulator integration test" used a FakeProtocol; added EmulatorFlashIntegrationTest running FlashTransaction -> FlashProtocolAdapter -> Kwp2000Protocol -> MockEdc16Transport.
+- Bug: FlashTransaction wrapped block sequence 255 -> 1, emulator/old path 0xFF -> 0x00; the real stack failed at block 256. Now 0xFF -> 0x00. The real ECU convention is not hardware-verified.
+- Deviation from spec stage order: PROGRAM_SESSION and SECURITY_ACCESS run before BACKUP because upload needs an unlocked session; backup still completes and is persisted before RequestDownload.
+- Removed EcuFlasher.flashFirmware/recoveryFlash: ECU ID check used `!a && !b` (either identifier passed), no security-verified gate; recovery had no read-back.
+- Emulator now rejects 0x34/0x35 without security access (NRC 0x33).
+
+## Task 8: Wire capability state into Android UI
+Commit: 0a897ddeb959db16e7ff92ad31c83f94c0a00283
+Tests:
+- ./gradlew testDebugUnitTest -> PASS
+- ./gradlew assembleDebug -> PASS
+Notes:
+- Bug: setControlsEnabled(true) after any read re-enabled WRITE/RECOVERY regardless of eligibility. Replaced by refreshCapabilityUi().
+- Fifth banner text `NO TRANSPORT / WRITE DISABLED` added for the disconnected state (previously showed EMULATOR).
+- Manual emulator smoke test on a device NOT run in this session (no device/emulator available); covered by JVM integration test only.
+
+## Task 9: Harden Termux bridge and keep Python behavior in parity
+Commit: 5f052c98907a6fbddb8419240a777d983f2a752f
+Tests:
+- python -m unittest termux/test_edc16_flasher.py -> PASS (10 tests)
+- ./gradlew testDebugUnitTest -> PASS
+- ./gradlew assembleDebug -> PASS
+Notes:
+- Besides WRITE_RAW/WRITE_MASKED/OUT CONTROL, link-mutating SET_BAUD/SET_DTR/SET_RTS/FAST_INIT/CAN_*/REINIT also require developer mode.
+- Python send_request still scans raw bytes for SIDs (read/ID path only); write path is unreachable while gates are false.
+
+## Task 10: Add CI and correct repository claims
+Commit: cdbf0703c53a1ad0cf980908ef1614d8797cc5c4
+Tests:
+- ./gradlew testDebugUnitTest -> PASS
+- ./gradlew assembleDebug -> PASS
+- python -m unittest termux/test_edc16_flasher.py -> PASS
+Notes:
+- gradlew was mode 100644 in git; set to 100755.
+- README MD5 for *_dpf_egr_off.bin was wrong (claimed d688cf73..., actual 25b08285...). SHA-256 48c8f368... matches.
+- *_dpf_egr_off.bin fails the declared checksum profile; it differs from *_CS_OK.bin only at 0x1BFFFC..0x1BFFFF and 0x1FDFFC..0x1FDFFF; after fix it equals *_CS_OK.bin byte for byte.
+- CI run result: pending first push.
+
+## Physical write
+Status: BLOCKED_EVIDENCE
+Missing fact: real EDC16U34 03G906021QJ/391847 seed -> key vectors with provenance
+Capability remains fail-closed: physical write and recovery (app: SECURITY_ALGORITHM_UNVERIFIED; CLI: also VOLTAGE_UNAVAILABLE)
+Observed evidence:
+- none committed; LegacyBlsSecurityAlgorithm.verified = false
+Next permitted action:
+- collect the missing evidence; do not guess an algorithm or protocol constant
+- also unverified on hardware: TransferData block-sequence wrap and 128-byte download block size
 
 ## Rules
 
