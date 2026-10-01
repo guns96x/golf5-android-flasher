@@ -27,6 +27,7 @@ import com.golf5.edc16flasher.protocol.EcuFlasher
 import com.golf5.edc16flasher.protocol.Kwp2000Protocol
 import com.golf5.edc16flasher.security.LegacyBlsSecurityAlgorithm
 import com.golf5.edc16flasher.security.MockSecurityAlgorithm
+import com.golf5.edc16flasher.security.Sa2BlsSecurityAlgorithm
 import com.golf5.edc16flasher.security.SecurityAccessAlgorithm
 import com.golf5.edc16flasher.usb.UsbSerialManager
 import kotlinx.coroutines.Dispatchers
@@ -71,9 +72,9 @@ class MainActivity : AppCompatActivity() {
     @Volatile
     private var isTransactionActive = false
 
-    /** The emulator only accepts its mock key; physical ECUs get the (unverified) legacy formula. */
+    /** The emulator only accepts its mock key; physical ECUs get the factory SA2 algorithm. */
     private val securityAlgorithm: SecurityAccessAlgorithm
-        get() = if (usbSerialManager.isPhysical) LegacyBlsSecurityAlgorithm else MockSecurityAlgorithm
+        get() = if (usbSerialManager.isPhysical) Sa2BlsSecurityAlgorithm else MockSecurityAlgorithm
 
     private val openDocumentLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()

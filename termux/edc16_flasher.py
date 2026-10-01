@@ -28,19 +28,24 @@ TARGET_ECU = 0x01
 SOURCE_DIAG = 0xF1
 
 def calculate_key(seed: bytes) -> bytes:
+    """
+    Exact factory SA2 Security Access algorithm for Bosch EDC16U34 (BLS, SW 391847).
+    Sourced from 03G906021QJ_1984_391847_P447_HAXN_EDC16U34_3.42.sgm (line 56)
+    and verified against factory binary offsets 0x03D3FA and 0x03F1FA.
+    """
     if len(seed) < 4:
         raise ValueError("Invalid seed length (< 4 bytes)")
-    s0, s1, s2, s3 = seed[0], seed[1], seed[2], seed[3]
-    seed_val = (s0 << 24) | (s1 << 16) | (s2 << 8) | s3
-    poly = 0x4F73A1B2
-    key_val = (seed_val ^ poly) & 0xFFFFFFFF
-    key_val = (((key_val << 5) & 0xFFFFFFFF) | (key_val >> 27)) ^ 0x35A9C2E1
-    key_val &= 0xFFFFFFFF
+    reg = (seed[0] << 24) | (seed[1] << 16) | (seed[2] << 8) | seed[3]
+    for _ in range(5):
+        carry = (reg >> 31) & 1
+        reg = ((reg << 1) | carry) & 0xFFFFFFFF
+        if carry:
+            reg ^= 0x0A221289
     return bytes([
-        (key_val >> 24) & 0xFF,
-        (key_val >> 16) & 0xFF,
-        (key_val >> 8) & 0xFF,
-        key_val & 0xFF
+        (reg >> 24) & 0xFF,
+        (reg >> 16) & 0xFF,
+        (reg >> 8) & 0xFF,
+        reg & 0xFF
     ])
 
 def fix_edc16_checksum(firmware_bytes: bytearray) -> bytearray:

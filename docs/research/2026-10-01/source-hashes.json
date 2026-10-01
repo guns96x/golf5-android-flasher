@@ -1,0 +1,17 @@
+[
+  {
+    "name": "upstream-ECU_Flasher_UNO_EDC16.ino",
+    "bytes": 35912,
+    "sha256": "1112f66a5c420f957e8d5913b98098fbb4b29389ef1daa2d6fdfb48af5f7c6da"
+  },
+  {
+    "name": "upstream-sa2-LICENSE",
+    "bytes": 1072,
+    "sha256": "8e3c85eac28f0bc6e5120bfd63f68e3821ac2312561c489a51c20f173374f58e"
+  },
+  {
+    "name": "upstream_sa2_seed_key.py",
+    "bytes": 3534,
+    "sha256": "dbd4e4afb2152dd5e06d063891da9a1e40623aea2ae86b09446be40114911f0e"
+  }
+]

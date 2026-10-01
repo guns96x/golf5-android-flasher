@@ -1,0 +1,8 @@
+{
+  "path": "C:\\Users\\pavlo\\golf5\\review-20260923\\remote-main\\firmware\\readbacks\\2026-09-23\\03G906021QJ_OBD_CAL_READBACK_2026-09-23.bin",
+  "size": 2097152,
+  "sha256": "a3c1c40dc378197da7863d22978055eea4669574b704b44f3935c2a7db55de27",
+  "prefix_0_to_17ffff_all_ff": true,
+  "full_recovery_backup": false,
+  "note": "Coverage check only; provenance is inherited from existing project report, not new physical read."
+}

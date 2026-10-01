@@ -1,0 +1,124 @@
+{
+  "operation": "OFFLINE_ONLY",
+  "sgm_path": "D:\\golf5-ecu-system\\diagnostic-review\\definitions\\03G906021QJ_1984_391847_P447_HAXN_EDC16U34_3.42\\03G906021QJ_1984_391847_P447_HAXN_EDC16U34_3.42.sgm",
+  "sgm_sha256": "9402e555649b635438e29d36e64513c90f26c9b7720bad6b04320233f6fd1ce3",
+  "factory_path": "D:\\golf5-ecu-system\\diagnostic-review\\reference-from-hex.analysis-only.bin",
+  "factory_sha256": "cf891152a97fb63609b40fc590fd86f38b034119b516e936eb8c0173e2551d26",
+  "identity": {
+    "CNT-DATEI": "03G906021QJ_1984.sgm",
+    "CNT-VERSION-TYP": "cvt_pfu_01",
+    "CNT-VERSION-INHALT": "1.01",
+    "CNT-IDENT-TEXT": null,
+    "SW-VERSION-KURZ": "1984",
+    "SW-VERSION-LANG": "03G906021QJ "
+  },
+  "kwp_target": "0x01",
+  "sa2_tape_hex": "68 05 81 4A 05 87 0A 22 12 89 49 4C",
+  "sa2_status": "EXACT_CONTAINER_DOCUMENTED_AND_OFFLINE_VM_CROSSCHECKED",
+  "hardware_security_access": "NOT_TESTED",
+  "complete_sa2_tape_offsets_in_factory_bin": [
+    "0x03D3FA",
+    "0x03F1FA"
+  ],
+  "vm_sha256": "dbd4e4afb2152dd5e06d063891da9a1e40623aea2ae86b09446be40114911f0e",
+  "vm_source": "https://github.com/bri3d/sa2_seed_key/blob/master/sa2_seed_key/sa2_seed_key.py",
+  "crosscheck_cases": 10007,
+  "vectors_origin": "SYNTHETIC_OFFLINE_COMPUTATION_NOT_ECU_CAPTURE",
+  "vectors": [
+    {
+      "seed": "00000000",
+      "key": "00000000"
+    },
+    {
+      "seed": "00000001",
+      "key": "00000020"
+    },
+    {
+      "seed": "7FFFFFFF",
+      "key": "98011618"
+    },
+    {
+      "seed": "80000000",
+      "key": "A2212880"
+    },
+    {
+      "seed": "FFFFFFFF",
+      "key": "3A203E98"
+    },
+    {
+      "seed": "12345678",
+      "key": "52CEEA10"
+    },
+    {
+      "seed": "1A1B1C1D",
+      "key": "5D05B438"
+    }
+  ],
+  "blocks": [
+    {
+      "name": "dav_pfu_01",
+      "data_start": "0x10000",
+      "decompressed_size": "0x2FF00",
+      "format": "0x02",
+      "erase_start": "0x10000",
+      "erase_end_inclusive": "0x3FFFF",
+      "check_start": "0x10000",
+      "check_end_inclusive": "0x3FEFF",
+      "sgm_checksum": "0x8F04",
+      "factory_byte_sum16": "0x8F04",
+      "sum16_matches": true
+    },
+    {
+      "name": "dav_pfu_02",
+      "data_start": "0x40000",
+      "decompressed_size": "0x140000",
+      "format": "0x02",
+      "erase_start": "0x40000",
+      "erase_end_inclusive": "0x17FFFF",
+      "check_start": "0x40000",
+      "check_end_inclusive": "0x17FFFF",
+      "sgm_checksum": "0x225D",
+      "factory_byte_sum16": "0x225D",
+      "sum16_matches": true
+    },
+    {
+      "name": "dav_pfu_04",
+      "data_start": "0x1C0000",
+      "decompressed_size": "0x3E000",
+      "format": "0x02",
+      "erase_start": "0x1C0000",
+      "erase_end_inclusive": "0x1FFFFF",
+      "check_start": "0x1C0000",
+      "check_end_inclusive": "0x1FDFFF",
+      "sgm_checksum": "0x73BA",
+      "factory_byte_sum16": "0x73BA",
+      "sum16_matches": true
+    },
+    {
+      "name": "dav_pfu_05",
+      "data_start": "0x180000",
+      "decompressed_size": "0x40000",
+      "format": "0x02",
+      "erase_start": "0x180000",
+      "erase_end_inclusive": "0x1BFFFF",
+      "check_start": "0x180000",
+      "check_end_inclusive": "0x1BFFFF",
+      "sgm_checksum": "0xEE55",
+      "factory_byte_sum16": "0xEE55",
+      "sum16_matches": true
+    }
+  ],
+  "timing_raw_container_values": {
+    "KWP-2000-P2MIN": "0x00",
+    "KWP-2000-P2MAX": "0x38",
+    "KWP-2000-P3MIN": "0x00",
+    "KWP-2000-P3MAX": "0x08",
+    "KWP-2000-P4MIN": "0x00"
+  },
+  "limitations": [
+    "SGM logical block names are not TransferData sequence counters.",
+    "Container geometry does not establish MPPS v18 USB behavior or physical packet size.",
+    "No hardware security subfunction, session sequence, or write operation validated.",
+    "Factory reconstruction is not the car's full recovery backup."
+  ]
+}
