@@ -50,8 +50,19 @@
         android:textStyle="bold"
         android:gravity="center"
         android:padding="6dp"
-        android:layout_marginBottom="8dp"
         android:background="#37474F" />
+
+    <!-- Why write/recovery are disabled (text, never colour only). Tap banner for details. -->
+    <TextView
+        android:id="@+id/tvEligibility"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/eligibility_no_transport"
+        android:textColor="#FFCC80"
+        android:textSize="11sp"
+        android:padding="4dp"
+        android:layout_marginBottom="8dp"
+        android:background="#1A1F26" />
 
     <!-- Vehicle Selector Card -->
     <LinearLayout
@@ -120,8 +131,8 @@
             android:id="@+id/tvFileStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="File: 03G906021QJ_stage1_refined_CS_OK.bin (2 097 152b)"
-            android:textColor="#69F0AE"
+            android:text="@string/file_not_selected"
+            android:textColor="#FFA726"
             android:textSize="11sp"
             android:fontFamily="monospace"
             android:layout_marginTop="2dp" />

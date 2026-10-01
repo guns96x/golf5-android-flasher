@@ -11,6 +11,7 @@
     <string name="mode_physical_read_only">PHYSICAL / READ ONLY</string>
     <string name="mode_physical_write_eligible">PHYSICAL / WRITE ELIGIBLE</string>
     <string name="mode_flashing">FLASHING - DO NOT DISCONNECT</string>
+    <string name="mode_disconnected">NO TRANSPORT / WRITE DISABLED</string>
 
     <!-- Refusal reason labels shown in the eligibility dialog -->
     <string name="refusal_not_connected">Транспорт не підключено</string>
@@ -21,5 +22,10 @@
     <string name="refusal_checksum">Контрольна сума EDC16 невалідна</string>
     <string name="refusal_security_unverified">Алгоритм Security Access не верифіковано</string>
     <string name="refusal_mpps_auth_unverified">MPPS автентифікація не верифікована (невідомий challenge)</string>
+    <string name="refusal_no_image">Файл прошивки не вибрано</string>
     <string name="refusal_backup_required">Резервна копія ЕБУ не збережена в цій сесії</string>
+
+    <string name="eligibility_no_transport">Запис заблоковано: транспорт не підключено</string>
+    <string name="eligibility_ok">Запис дозволено: усі перевірки пройдено</string>
+    <string name="file_not_selected">File: не вибрано (натисніть «Вибрати файл»)</string>
 </resources>
